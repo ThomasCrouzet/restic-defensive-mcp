@@ -1,0 +1,64 @@
+# Example configuration for restic-defensive-mcp.
+# Copy and adjust paths. Never commit real secrets.
+#
+#   restic-defensive-mcp --config /path/to/config.yaml
+#
+# Callers may only pass repository_id values defined here.
+# Repository URLs, backends, password files, and cache dirs are NOT accepted
+# from MCP tool arguments.
+
+version: 1
+
+# Optional absolute path to restic. Default: look up "restic" on PATH at boot.
+# restic_binary: /usr/local/bin/restic
+
+limits:
+  # Bounds for ordinary commands (snapshots, get_snapshot).
+  command_timeout: 30s
+  # Bounds for ls / find / stats.
+  expensive_command_timeout: 5m
+  max_snapshots: 100
+  max_nodes: 500
+  max_find_results: 200
+  # Cap on restic stdout/stderr per invocation (bytes).
+  max_output_bytes: 8388608
+  max_concurrent_per_repo: 1
+  max_concurrent_global: 4
+
+repositories:
+  - id: local-example
+    # Optional non-sensitive label shown to MCP clients.
+    label: Example local repository
+    # File containing the repository location (path or URL). Mode 0600, not a symlink.
+    # Its value is loaded and sealed at boot; restart to change repositories.
+    repository_file: /run/secrets/restic-repository
+    # File containing the repository password. Mode 0600, not a symlink.
+    password_file: /run/secrets/restic-password
+    # Optional dedicated cache directory for this repository.
+    cache_dir: /var/cache/restic-defensive/local-example
+    # Restrictions (enforced server-side, not cosmetics). Empty list = NO restriction for
+    # that dimension — empty allowed_paths exposes all snapshot path metadata to clients.
+    # Prefer explicit allowlists in production. Boot logs empty_allowlist warnings when
+    # any of these lists is empty (warn only; server still starts).
+    allowed_hosts: [example-host]
+    allowed_tags: [daily, weekly]
+    allowed_paths:
+      - /srv/data
+      - /etc/example
+    # Optional KEY=VALUE files for backend credentials (AWS_*, B2_*, RESTIC_REST_*).
+    # Must not set RESTIC_PASSWORD, RESTIC_REPOSITORY, or RESTIC_PASSWORD_COMMAND.
+    # Child env uses HOME=/var/empty, so AWS_PROFILE alone will not load ~/.aws/credentials.
+    # Prefer AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, or set AWS_SHARED_CREDENTIALS_FILE
+    # to an absolute path listed here.
+    # env_files:
+    #   - /run/secrets/restic-s3-env
+
+  # - id: offsite-s3-example
+  #   label: Offsite S3 (example only)
+  #   repository_file: /run/secrets/restic-s3-repository
+  #   password_file: /run/secrets/restic-s3-password
+  #   cache_dir: /var/cache/restic-defensive/offsite-s3
+  #   allowed_hosts: [backup-host]
+  #   allowed_tags: [daily]
+  #   allowed_paths: [/srv/data]
+  #   env_files: [/run/secrets/restic-s3-env]

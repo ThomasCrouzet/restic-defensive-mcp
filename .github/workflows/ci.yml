@@ -1,0 +1,120 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.25.x'
+  RESTIC_VERSION: '0.17.1'
+  GOVULNCHECK_VERSION: 'v1.6.0'
+  GITLEAKS_VERSION: '8.30.1'
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: download modules
+        run: go mod download && go mod verify
+
+      - name: gofmt
+        run: |
+          test -z "$(gofmt -l . | tee /dev/stderr)"
+
+      - name: lint
+        run: make lint
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: test with race
+        run: go test -race -count=1 ./...
+
+      - name: fuzz smoke
+        run: make fuzz-smoke
+
+      - name: install restic (pinned + checksum)
+        run: |
+          set -euo pipefail
+          VER="${RESTIC_VERSION}"
+          ARCH=amd64
+          URL="https://github.com/restic/restic/releases/download/v${VER}/restic_${VER}_linux_${ARCH}.bz2"
+          curl -fsSL -o /tmp/restic.bz2 "$URL"
+          # Verify checksum from restic SHA256SUMS when available
+          SUMS_URL="https://github.com/restic/restic/releases/download/v${VER}/SHA256SUMS"
+          curl -fsSL -o /tmp/SHA256SUMS "$SUMS_URL"
+          EXPECT="$(grep "restic_${VER}_linux_${ARCH}.bz2" /tmp/SHA256SUMS | awk '{print $1}')"
+          echo "$EXPECT  /tmp/restic.bz2" | sha256sum -c -
+          bunzip2 -c /tmp/restic.bz2 > /tmp/restic
+          chmod +x /tmp/restic
+          sudo mv /tmp/restic /usr/local/bin/restic
+          restic version
+
+      - name: integration test
+        run: go test -tags=integration -count=1 -timeout 5m -v .
+
+      - name: no mutation tools guard
+        run: |
+          go test ./internal/mcpserver -count=1 -run TestToolListExactSevenNoMutation
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
+
+      - name: build multi-arch smoke
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for pair in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            os="${pair%/*}"
+            arch="${pair#*/}"
+            ext=""
+            if [ "$os" = windows ]; then ext=.exe; fi
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' \
+              -o "dist/restic-defensive-mcp-${os}-${arch}${ext}" ./cmd/restic-defensive-mcp
+          done
+          ls -la dist/
+
+      - name: go mod tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: install gitleaks
+        run: |
+          set -euo pipefail
+          ver="${GITLEAKS_VERSION}"
+          asset="gitleaks_${ver}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${ver}"
+          curl -fsSLO "${base}/${asset}"
+          curl -fsSLO "${base}/gitleaks_${ver}_checksums.txt"
+          grep "  ${asset}$" "gitleaks_${ver}_checksums.txt" | sha256sum -c -
+          tar -xzf "${asset}" gitleaks
+          chmod +x gitleaks
+
+      - name: scan git history
+        run: ./gitleaks git . --redact --no-banner
