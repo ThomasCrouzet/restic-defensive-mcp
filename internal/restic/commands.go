@@ -175,7 +175,7 @@ func BuildFindArgv(opts FindOpts) ([]string, error) {
 	}
 	for _, snapshotID := range opts.SnapshotIDs {
 		if !ValidSnapshotID(snapshotID) || snapshotID == "latest" {
-			// find uses --snapshot; latest is not documented the same way — reject latest.
+			// find uses --snapshot; latest is not documented the same way: reject latest.
 			if snapshotID == "latest" {
 				return nil, fmt.Errorf("latest is not supported for find; pass a concrete snapshot id")
 			}

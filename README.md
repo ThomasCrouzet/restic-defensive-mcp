@@ -24,7 +24,7 @@ This project is different by construction:
 1. Repositories are **declared and sealed at process start**
 2. MCP surface is **exclusively read-only** (no feature flag for writes)
 3. Only a **compiled-in subset** of restic subcommands can be built
-4. **No shell** — `exec.CommandContext` with fixed argv only
+4. **No shell**: `exec.CommandContext` with fixed argv only
 5. Hosts, tags, paths, and result sizes are **bounded**
 6. Secrets come from **permission-checked files**, never `RESTIC_PASSWORD_COMMAND`
 7. Errors are **structured and redacted**
@@ -200,4 +200,4 @@ Restic itself is an external binary, not a Go module.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

@@ -32,7 +32,7 @@ type Snapshot struct {
 	Username string    `json:"username,omitempty"`
 	Tags     []string  `json:"tags,omitempty"`
 	ID       string    `json:"id"`
-	// ProgramVersion omitted from default client view if desired — keep for diagnostics.
+	// ProgramVersion omitted from default client view if desired: keep for diagnostics.
 	ProgramVersion string           `json:"program_version,omitempty"`
 	Summary        *SnapshotSummary `json:"summary,omitempty"`
 }

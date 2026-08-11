@@ -2,7 +2,7 @@
 
 ## Minimum version
 
-**0.17.1** — required for stable repository, lock, and authentication exit
+**0.17.1**: required for stable repository, lock, and authentication exit
 codes:
 
 | Code | Meaning |

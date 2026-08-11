@@ -27,12 +27,12 @@ treated as potentially compromised, confused, or hostile.
 
 ### Trust boundaries
 
-1. **MCP client (untrusted)** — tool arguments may be adversarial.
-2. **YAML config + secret files (operator trusted)** — loaded only at boot.
-3. **Restic binary (trusted dependency)** — resolved at boot, argv locked.
-4. **Repository data (untrusted content)** — file names and JSON fields from
+1. **MCP client (untrusted)**: tool arguments may be adversarial.
+2. **YAML config + secret files (operator trusted)**: loaded only at boot.
+3. **Restic binary (trusted dependency)**: resolved at boot, argv locked.
+4. **Repository data (untrusted content)**: file names and JSON fields from
    the repository are treated as hostile input.
-5. **Backends (partially trusted)** — slow or malicious backends can DoS;
+5. **Backends (partially trusted)**: slow or malicious backends can DoS;
    SFTP/rclone are rejected in v0.1 because they spawn external helpers.
 
 ### Guarantees (v0.1)

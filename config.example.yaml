@@ -37,7 +37,7 @@ repositories:
     # Optional dedicated cache directory for this repository.
     cache_dir: /var/cache/restic-defensive/local-example
     # Restrictions (enforced server-side, not cosmetics). Empty list = NO restriction for
-    # that dimension — empty allowed_paths exposes all snapshot path metadata to clients.
+    # that dimension: empty allowed_paths exposes all snapshot path metadata to clients.
     # Prefer explicit allowlists in production. Boot logs empty_allowlist warnings when
     # any of these lists is empty (warn only; server still starts).
     allowed_hosts: [example-host]
