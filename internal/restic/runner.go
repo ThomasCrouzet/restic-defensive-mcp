@@ -252,7 +252,7 @@ func redactChildStderr(stderr []byte, env []string) []byte {
 // BuildChildEnv constructs a minimal environment for a repository.
 // It does not inherit RESTIC_* or cloud credentials from the parent process.
 func BuildChildEnv(opts ChildEnvOpts) ([]string, error) {
-	// Base: PATH and locale only from parent (needed to find nothing — binary is absolute).
+	// Base: PATH and locale only from parent (needed to find nothing: binary is absolute).
 	// Still provide a minimal PATH and system roots for TLS.
 	env := []string{
 		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
@@ -324,7 +324,7 @@ var allowedEnvKeys = map[string]struct{}{
 	"B2_ACCOUNT_ID": {}, "B2_ACCOUNT_KEY": {},
 	// REST server
 	"RESTIC_REST_USERNAME": {}, "RESTIC_REST_PASSWORD": {},
-	// TLS optional custom CA via file path only — we do not pass --cacert; skip for v0.1
+	// TLS optional custom CA via file path only: we do not pass --cacert; skip for v0.1
 	"TMPDIR": {}, "TMP": {}, "TEMP": {},
 }
 

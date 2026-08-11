@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.1.0] — unreleased
+## [0.1.0]: unreleased
 
 ### Added
 

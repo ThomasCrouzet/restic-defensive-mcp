@@ -428,7 +428,7 @@ func TestGetSnapshotAmbiguousPrefix(t *testing.T) {
 }
 
 func TestFindFilesCountAfterPathFilter(t *testing.T) {
-	// One match under allowlist (/data), one outside (/etc) — count must be 1 after filter.
+	// One match under allowlist (/data), one outside (/etc): count must be 1 after filter.
 	raw := `[{"hits":2,"snapshot":"abcdef01","matches":[
 		{"path":"/data/hello.txt","name":"hello.txt","type":"file","size":1,"mtime":"2024-01-01T00:00:00Z"},
 		{"path":"/etc/shadow","name":"shadow","type":"file","size":1,"mtime":"2024-01-01T00:00:00Z"}

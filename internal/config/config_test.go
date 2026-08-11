@@ -167,6 +167,9 @@ func TestOpenSecretFileRejectsPermissiveMode(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "wide")
 	mustWrite(t, p, "secret\n", 0o644)
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	_, err := OpenSecretFile(p)
 	if err == nil {
 		t.Fatal("expected permission rejection")
