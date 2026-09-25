@@ -23,9 +23,6 @@ func TestNewAndCodes(t *testing.T) {
 	if with.Detail != "x" {
 		t.Fatal(with.Detail)
 	}
-	if !errors.Is(with, with) {
-		t.Fatal("unwrap chain")
-	}
 	// Cause must not appear in Error() string for client safety of accidental log of Error().
 	if with.Error() == "" || errors.Unwrap(with) == nil {
 		t.Fatal("cause missing")

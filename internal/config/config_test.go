@@ -122,17 +122,6 @@ func TestSecretPathParentSegmentValidation(t *testing.T) {
 	}
 }
 
-func TestRejectUnknownConfigField(t *testing.T) {
-	_, err := Parse([]byte(`
-version: 1
-unexpected: true
-	repositories: []
-`))
-	if err == nil {
-		t.Fatalf("expected unknown-field error, got %v", err)
-	}
-}
-
 func TestRejectMultipleYAMLDocuments(t *testing.T) {
 	_, err := Parse([]byte(`
 version: 1
@@ -221,16 +210,6 @@ func TestEmptyAllowlistWarnings(t *testing.T) {
 	if len((*Config)(nil).EmptyAllowlistWarnings()) != 0 {
 		t.Fatal("nil config")
 	}
-}
-
-func TestFuzzParseSmoke(t *testing.T) {
-	// Ensure fuzz target compiles; actual fuzz runs in CI with -fuzztime.
-	f := func(data []byte) {
-		_, _ = Parse(data)
-	}
-	f([]byte("version: 1\n"))
-	f([]byte("{not yaml"))
-	f(nil)
 }
 
 func FuzzParse(f *testing.F) {

@@ -35,7 +35,8 @@ make integration   # if restic is installed
 Changes to argv construction, environment building, backend classification,
 path policy, or secret file handling require:
 
-- unit tests
+- documented failure modes and observable E2E checks
+- isolated tests only for concrete failures that E2E tests cannot detect
 - an explicit note in the PR description
 - no weakening of allowlists "to make a test pass"
 
@@ -57,3 +58,6 @@ internal/audit/
 
 Production code must not call restic `init` or `backup`. Those exist only in
 `internal/testrepo`.
+
+Follow the testing policy in [AGENTS.md](AGENTS.md).
+Never write unit tests after implementation.

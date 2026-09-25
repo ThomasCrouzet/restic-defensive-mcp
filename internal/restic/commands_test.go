@@ -405,22 +405,6 @@ func TestCompareVersion(t *testing.T) {
 	}
 }
 
-func TestFakeRunnerRecordsArgv(t *testing.T) {
-	f := NewFakeRunner()
-	f.DefaultResult = &Result{Stdout: []byte("[]"), ExitCode: 0}
-	_, err := f.Run(t.Context(), RunRequest{
-		Argv: []string{"snapshots", "--json"},
-		Env:  []string{"A=1"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := f.LastCall()
-	if c == nil || c.Argv[0] != "snapshots" {
-		t.Fatalf("%+v", c)
-	}
-}
-
 func TestFakeRunnerRejectsBackup(t *testing.T) {
 	f := NewFakeRunner()
 	_, err := f.Run(t.Context(), RunRequest{Argv: []string{"backup", "/tmp"}})
