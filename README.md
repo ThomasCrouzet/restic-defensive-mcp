@@ -1,39 +1,20 @@
 # restic-defensive-mcp
 
-Structurally read-only [MCP](https://modelcontextprotocol.io) server (stdio) for
-inspecting [restic](https://restic.net) repositories through an untrusted MCP
-client **without** exposing a shell, free-form CLI, or mutation path.
+Inspect [restic](https://restic.net) snapshots through a **read-only stdio**
+[MCP](https://modelcontextprotocol.io) server. List backups, browse file metadata,
+find paths, and get repository statistics.
 
-> Are my backups present and recent, is their metadata readable, and does a
-> snapshot contain the files I expect?
+![Configured repository IDs and path policies constrain five fixed restic commands. Results contain metadata, not file contents.](docs/diagrams/inspection-flow.svg)
 
-## Why not expose `restic` directly?
-
-Restic is a powerful backup tool. An unrestricted caller can:
-
-- delete retention history (`forget` / `prune`)
-- overwrite or extract data (`backup` / `restore` / `dump`)
-- unlock or rewrite repository state
-- accept arbitrary repository URLs and password commands
-
-Thin wrappers that expose "run restic with these args" or per-call repository
-overrides recreate that blast radius inside MCP.
-
-This project is different by construction:
-
-1. Repositories are **declared and sealed at process start**
-2. MCP surface is **exclusively read-only** (no feature flag for writes)
-3. Only a **compiled-in subset** of restic subcommands can be built
-4. **No shell**: `exec.CommandContext` with fixed argv only
-5. Hosts, tags, paths, and result sizes are **bounded**
-6. Secrets come from **permission-checked files**, never `RESTIC_PASSWORD_COMMAND`
-7. Errors are **structured and redacted**
-8. Every tool reports an explicit **cost class** (`light` / `moderate` / `expensive`)
+Repository locations remain fixed after startup. The runner accepts only
+`version`, `snapshots`, `ls`, `find`, and `stats` with controlled arguments.
+It uses no shell. Policies restrict hosts, tags, paths, and result sizes.
+Errors remove secrets, and each tool reports its cost class.
 
 ## Requirements
 
 - Go 1.25+ (build)
-- restic **0.17.1+** on `PATH` (or `restic_binary` in config); tested with 0.19.x
+- restic **0.17.1+** on `PATH`, or an explicit `restic_binary` path. CI uses 0.17.1.
 - An MCP client that supports local stdio servers
 
 ## Install (from source)
@@ -47,8 +28,8 @@ make build
 
 ## Quick start
 
-1. Create password and repository location files (regular files, no symlinks).
-   Avoid placing the password in shell history:
+1. Create regular password and repository location files outside the repository.
+   Do not use symlinks. Enter the password through an editor:
 
 ```bash
 secret_dir="${XDG_CONFIG_HOME:-$HOME/.config}/restic-defensive-mcp"
@@ -59,17 +40,18 @@ install -m 600 /dev/null "$secret_dir/password"
 "${EDITOR:-vi}" "$secret_dir/password"
 ```
 
-2. Copy and edit `config.example.yaml`, including the two file paths above.
+2. Copy [config.example.yaml](config.example.yaml) outside the repository.
+3. Set its repository file, password file, and host/tag/path allowlists.
 
-3. Run the freshly built binary:
+4. Start the binary:
 
 ```bash
 ./bin/restic-defensive-mcp --config /path/to/config.yaml
 ```
 
-4. Point your MCP host at the binary with `--config` (stdio transport only).
+5. Register the absolute binary path and `--config` argument in your MCP host.
 
-Example MCP host snippet (illustrative):
+Example MCP client configuration:
 
 ```json
 {
@@ -89,10 +71,10 @@ Example MCP host snippet (illustrative):
 | `restic_capabilities` | light | Versions, limits, backends, warnings |
 | `list_repositories` | light | Configured IDs and allowlists (no URLs) |
 | `list_snapshots` | light | Bounded snapshot list |
-| `get_snapshot` | light | One snapshot metadata |
+| `get_snapshot` | light | Metadata for one snapshot |
 | `browse_snapshot` | moderate | Directory listing inside allowlisted path |
-| `find_files` | moderate–expensive | Simple glob find (not arbitrary regex) |
-| `repository_stats` | moderate–expensive | Size/count stats for allowlisted modes |
+| `find_files` | moderate or expensive | Simple glob search |
+| `repository_stats` | moderate or expensive | Size/count statistics for permitted modes |
 
 There is **no** `run_restic`, `backup`, `restore`, `forget`, `prune`, `unlock`,
 `check --read-data`, or repository URL argument.
@@ -101,13 +83,13 @@ Full request/response shapes: [docs/tool-contract.md](docs/tool-contract.md).
 
 ## Configuration
 
-See [config.example.yaml](config.example.yaml). Principles:
+See [config.example.yaml](config.example.yaml) for all settings:
 
 - MCP callers pass only `repository_id`
 - Prefer `repository_file` + `password_file` over inline secrets
 - Repository locations and backend credentials are loaded and sealed at boot;
   changing their source files does not retarget a running server
-- `allowed_hosts` / `allowed_tags` / `allowed_paths` are **enforcement**, not cosmetics
+- `allowed_hosts`, `allowed_tags`, and `allowed_paths` enforce access restrictions
 - Empty allowlists mean **no restriction** for that dimension; the server logs a
   boot-time warning (`empty_allowlist`) so operators notice
 - Unknown YAML keys and multiple YAML documents are rejected
@@ -118,7 +100,7 @@ See [config.example.yaml](config.example.yaml). Principles:
   **rejected** (not silently clamped). Defaults are the recommended starting
   point; values may be raised only up to those ceilings
 
-## Supported backends (v0.1)
+## Supported backends
 
 | Backend | Supported |
 |---------|-----------|
@@ -134,7 +116,7 @@ Compatibility notes: [docs/restic-compatibility.md](docs/restic-compatibility.md
 
 ## Local effects: cache and locks
 
-Inspection is **not** a pure no-op on disk or on the repository lock table:
+Read-only inspection can have these local and repository effects:
 
 - restic may create or update a **local cache** (`cache_dir` or default)
 - restic may take a **repository lock** during snapshots/ls/find/stats
@@ -162,17 +144,18 @@ This server:
 make demo
 ```
 
-Runs the end-to-end harness against a throwaway restic repository created by
-`internal/testrepo`. It exercises every MCP tool, proves path denial and the
-absence of mutation tools, then removes the fixture. Repository operations stay
-local; normal Go module downloads may still occur on a fresh checkout.
+The demo uses in-memory MCP and real restic commands against a temporary repository.
+`internal/testrepo` creates two backups and removes the fixture after the run.
+The suite calls all seven tools and checks path denial and the absence of mutation tools.
+It does not start the MCP executable or restore file contents.
+Go can download modules on a new checkout.
 
 ## Development
 
 ```bash
 make fmt
 make lint
-make test          # unit tests
+make test          # local regression tests
 make race          # race detector
 make fuzz-smoke    # short run of every fuzz target
 make integration   # real restic temp repo (requires restic)
@@ -188,15 +171,12 @@ make vet
 
 Restic itself is an external binary, not a Go module.
 
-## Non-goals
+## Documentation
 
-- Backup orchestration or scheduling
-- Restore / forget / prune / unlock / repair
-- Generic restic CLI proxy
-- Autorestic config import
-- Remote multi-tenant API
-- Full `restic check --read-data` as a casual tool
-- Telemetry or auto-update
+- [Tool contract](docs/tool-contract.md): inputs, outputs, policies, and costs.
+- [restic compatibility](docs/restic-compatibility.md): commands and backend limits.
+- [Security](SECURITY.md): secret files, metadata privacy, and remaining risks.
+- [Contributing](CONTRIBUTING.md) and [Changelog](CHANGELOG.md).
 
 ## License
 
