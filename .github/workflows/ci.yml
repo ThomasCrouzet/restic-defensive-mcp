@@ -9,8 +9,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  GO_VERSION: '1.25.x'
+  GO_VERSION: '1.26.9'
   RESTIC_VERSION: '0.17.1'
   GOVULNCHECK_VERSION: 'v1.6.0'
   GITLEAKS_VERSION: '8.30.1'
@@ -37,8 +41,20 @@ jobs:
         run: |
           test -z "$(gofmt -l . | tee /dev/stderr)"
 
+      - name: cache lint analysis
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/golangci-lint
+          key: lint-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-v2.12.2-${{ hashFiles('go.sum', '.golangci.yml') }}
+
       - name: lint
-        run: make lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        env:
+          GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint
+        with:
+          version: v2.12.2
+          args: --timeout=5m ./...
+          skip-cache: true
 
       - name: go vet
         run: go vet ./...

@@ -26,7 +26,7 @@ fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './.git/*')
 
 lint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6 run ./...
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 
 fuzz-smoke:
 	go test ./internal/config -run '^$$' -fuzz '^FuzzParse$$' -fuzztime=$(FUZZTIME)
