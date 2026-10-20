@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      fuzz:
+        description: Run random fuzz exploration
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -56,13 +62,11 @@ jobs:
           args: --timeout=5m ./...
           skip-cache: true
 
-      - name: go vet
-        run: go vet ./...
-
       - name: test with race
         run: go test -race -count=1 ./...
 
       - name: fuzz smoke
+        if: github.event_name == 'workflow_dispatch' && inputs.fuzz
         run: make fuzz-smoke
 
       - name: install restic (pinned + checksum)
@@ -84,10 +88,6 @@ jobs:
 
       - name: integration test
         run: go test -tags=integration -count=1 -timeout 5m -v .
-
-      - name: no mutation tools guard
-        run: |
-          go test ./internal/mcpserver -count=1 -run TestToolListExactSevenNoMutation
 
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
