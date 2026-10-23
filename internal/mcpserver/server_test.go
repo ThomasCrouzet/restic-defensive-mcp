@@ -105,7 +105,10 @@ func TestCapabilitiesAndListRepos(t *testing.T) {
 }
 
 func TestUnknownRepository(t *testing.T) {
+	const unknownID = "/Users/victim/private/path"
+	var auditBuf bytes.Buffer
 	deps := testDeps(t, nil)
+	deps.Audit = audit.New(&auditBuf)
 	srv := mcpserver.NewServer(deps)
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -120,7 +123,7 @@ func TestUnknownRepository(t *testing.T) {
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "list_snapshots",
 		Arguments: map[string]any{
-			"repository_id": "no-such-repo",
+			"repository_id": unknownID,
 		},
 	})
 	if err != nil {
@@ -131,6 +134,14 @@ func TestUnknownRepository(t *testing.T) {
 	}
 	if !strings.Contains(contentText(res), "repository_not_found") {
 		t.Fatalf("got %s", contentText(res))
+	}
+	log := auditBuf.String()
+	if !strings.Contains(log, `"action":"tool_rejected"`) ||
+		!strings.Contains(log, `"error_code":"repository_not_found"`) {
+		t.Fatalf("unknown repository rejection was not audited: %s", log)
+	}
+	if strings.Contains(log, unknownID) {
+		t.Fatalf("untrusted repository_id leaked into audit log: %s", log)
 	}
 }
 

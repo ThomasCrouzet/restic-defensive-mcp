@@ -20,6 +20,7 @@ const (
 	UnsupportedBackend    Code = "unsupported_backend"
 	AuthenticationFailed  Code = "authentication_failed"
 	RepositoryLocked      Code = "repository_locked"
+	ResourceBusy          Code = "resource_busy"
 	Timeout               Code = "timeout"
 	Cancelled             Code = "cancelled"
 	OutputLimitExceeded   Code = "output_limit_exceeded"

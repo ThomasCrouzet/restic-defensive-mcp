@@ -117,7 +117,28 @@ func (r *ExecRunner) Run(ctx context.Context, req RunRequest) (*Result, error) {
 	cmd.Stderr = &stderr
 
 	start := time.Now()
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		// CommandContext can stop watching when the group leader exits.
+		// Keep cancellation active until inherited output pipes also close.
+		finished := make(chan struct{})
+		watcherDone := make(chan struct{})
+		go func() {
+			defer close(watcherDone)
+			select {
+			case <-runCtx.Done():
+				_ = killProcessGroup(cmd)
+			case <-finished:
+			}
+		}()
+		err = cmd.Wait()
+		close(finished)
+		<-watcherDone
+		if errors.Is(err, exec.ErrWaitDelay) {
+			// WaitDelay closes pipes but does not stop their remaining owners.
+			_ = killProcessGroup(cmd)
+		}
+	}
 	dur := time.Since(start)
 	safeStderr := redactChildStderr(stderr.Bytes(), req.Env)
 
@@ -197,10 +218,8 @@ func (c *cappedBuffer) Bytes() []byte {
 }
 
 // MapExitCode converts restic exit codes to structured errors.
-// stderr is redacted before inclusion in messages.
-func MapExitCode(code int, stderr []byte) error {
-	msg := redaction.SanitizeAndRedact(string(stderr))
-	msg = redaction.Clip(msg, 400)
+// It omits stderr from client-facing errors. Result.Stderr retains the redacted value.
+func MapExitCode(code int, _ []byte) error {
 	switch code {
 	case 0:
 		return nil
@@ -213,11 +232,7 @@ func MapExitCode(code int, stderr []byte) error {
 	case 130:
 		return apperr.New(apperr.Cancelled, "restic command cancelled")
 	default:
-		e := apperr.New(apperr.InternalError, "restic command failed")
-		if msg != "" {
-			e = e.WithDetail(msg)
-		}
-		return e
+		return apperr.New(apperr.InternalError, "restic command failed")
 	}
 }
 
@@ -318,8 +333,7 @@ type ChildEnvOpts struct {
 var allowedEnvKeys = map[string]struct{}{
 	// AWS / S3
 	"AWS_ACCESS_KEY_ID": {}, "AWS_SECRET_ACCESS_KEY": {}, "AWS_SESSION_TOKEN": {},
-	"AWS_DEFAULT_REGION": {}, "AWS_REGION": {}, "AWS_PROFILE": {},
-	"AWS_SHARED_CREDENTIALS_FILE": {},
+	"AWS_DEFAULT_REGION": {}, "AWS_REGION": {},
 	// B2
 	"B2_ACCOUNT_ID": {}, "B2_ACCOUNT_KEY": {},
 	// REST server

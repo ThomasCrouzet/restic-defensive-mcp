@@ -33,6 +33,7 @@ repositories:
     # Its value is loaded and sealed at boot; restart to change repositories.
     repository_file: /run/secrets/restic-repository
     # File containing the repository password. Mode 0600, not a symlink.
+    # Restic reads its current contents for each command. Keep replacement files private.
     password_file: /run/secrets/restic-password
     # Optional dedicated cache directory for this repository.
     cache_dir: /var/cache/restic-defensive/local-example
@@ -47,9 +48,9 @@ repositories:
       - /etc/example
     # Optional KEY=VALUE files for backend credentials (AWS_*, B2_*, RESTIC_REST_*).
     # Must not set RESTIC_PASSWORD, RESTIC_REPOSITORY, or RESTIC_PASSWORD_COMMAND.
-    # Child env uses HOME=/var/empty, so AWS_PROFILE alone will not load ~/.aws/credentials.
-    # Prefer AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, or set AWS_SHARED_CREDENTIALS_FILE
-    # to an absolute path listed here.
+    # S3 requires nonempty AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, with optional AWS_SESSION_TOKEN.
+    # Instance-role credentials and anonymous S3 access are unsupported.
+    # AWS_PROFILE and AWS_SHARED_CREDENTIALS_FILE are rejected because profiles can run helpers.
     # env_files:
     #   - /run/secrets/restic-s3-env
 

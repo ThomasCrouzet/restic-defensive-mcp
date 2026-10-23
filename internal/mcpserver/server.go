@@ -163,13 +163,17 @@ func auditPreResticRejection(deps Deps, tool, repoID string, err error) {
 		return
 	}
 	status := "error"
+	auditRepoID := repoID
 	if ae.Code == apperr.NotAllowed {
 		status = "denied"
+	} else {
+		// Unknown identifiers are client-controlled and can contain sensitive paths.
+		auditRepoID = ""
 	}
 	deps.Audit.Log(audit.Event{
 		Action:       "tool_rejected",
 		Tool:         tool,
-		RepositoryID: repoID,
+		RepositoryID: auditRepoID,
 		Status:       status,
 		ErrorCode:    string(ae.Code),
 		Message:      ae.Message,
