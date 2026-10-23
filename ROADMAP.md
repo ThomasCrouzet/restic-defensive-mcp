@@ -8,7 +8,9 @@ Structurally read-only inspection:
 - Seven MCP tools, no mutations
 - Local / S3 / B2 / REST backends
 - Bounds, redaction, audit, cost classes
-- Real restic integration tests on temporary repos
+- Executable stdio tests with real restic and temporary repositories
+- Local protocol evidence and real-child cancellation checks
+- Releases with platform archives, checksums, and license notices
 
 ## After v0.1 (reporting and compatibility)
 
@@ -16,7 +18,7 @@ Possible improvements that stay read-only:
 
 - Richer pagination cursors
 - Optional metadata-only health summary with explicit "what was not verified"
-- Broader restic version matrix in CI
+- Native Windows runtime checks and disposable remote backend fixtures
 - Stronger singleflight/caching for identical light queries (no sensitive persistence by default)
 - Windows path policy hardening if demand appears
 - Optional `diff_snapshots` as a replacement for an existing tool slot (still max seven), with hard limits

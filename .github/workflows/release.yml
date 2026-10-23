@@ -1,0 +1,131 @@
+name: release
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+env:
+  RESTIC_VERSION: '0.19.1'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: verify release source
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          commit="$(git rev-list -n 1 "$tag")"
+          event_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          test "$commit" = "$event_commit"
+          git merge-base --is-ancestor "$commit" origin/main
+
+          version="${tag#v}"
+          changelog_header="$(grep -F -m 1 "## [$version]" CHANGELOG.md)"
+          test -n "$changelog_header"
+          if grep -qi 'unreleased' <<<"$changelog_header"; then
+            echo "The release changelog is still marked unreleased." >&2
+            exit 1
+          fi
+
+      - name: download modules
+        run: go mod download && go mod verify
+
+      - name: build release assets
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          commit="$(git rev-list -n 1 "$tag")"
+          source_date_epoch="$(git show -s --format=%ct "$commit")"
+          python3 scripts/build_release.py \
+            --version "$version" \
+            --output-dir dist \
+            --source-date-epoch "$source_date_epoch"
+
+          linux_archive="dist/restic-defensive-mcp_${version}_linux_amd64.tar.gz"
+          mkdir -p verify
+          tar -xzf "$linux_archive" -C verify
+          test "$(verify/restic-defensive-mcp --version)" = "restic-defensive-mcp ${version}"
+
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: install restic for release validation
+        run: |
+          set -euo pipefail
+          ver="$RESTIC_VERSION"
+          asset="restic_${ver}_linux_amd64.bz2"
+          base="https://github.com/restic/restic/releases/download/v${ver}"
+          install_dir="$RUNNER_TEMP/restic-release-validation"
+          archive="$RUNNER_TEMP/$asset"
+          sums="$RUNNER_TEMP/restic-SHA256SUMS"
+          mkdir -p "$install_dir"
+          curl -fsSL -o "$archive" "${base}/${asset}"
+          curl -fsSL -o "$sums" "${base}/SHA256SUMS"
+          expected="$(awk -v asset="$asset" '$2 == asset {print $1}' "$sums")"
+          test -n "$expected"
+          echo "$expected  $archive" | sha256sum -c -
+          bunzip2 -c "$archive" >"$install_dir/restic"
+          chmod +x "$install_dir/restic"
+
+      - name: validate release executable
+        run: |
+          set -euo pipefail
+          binary="$GITHUB_WORKSPACE/verify/restic-defensive-mcp"
+          artifact_dir="$RUNNER_TEMP/restic-defensive-mcp-release-e2e"
+          command="GOMAXPROCS=2 GOFLAGS=-p=1 go test -tags=integration -run '^TestExecutableStdioEndToEnd$' -count=1 -timeout 5m -v ."
+          mkdir -p "$artifact_dir"
+          PATH="$RUNNER_TEMP/restic-release-validation:$PATH" \
+            GOMAXPROCS=2 \
+            GOFLAGS=-p=1 \
+            RESTIC_MCP_ARTIFACT_DIR="$artifact_dir" \
+            RESTIC_MCP_BINARY="$binary" \
+            RESTIC_MCP_E2E_COMMAND="$command" \
+            go test -tags=integration -run '^TestExecutableStdioEndToEnd$' -count=1 -timeout 5m -v .
+
+      - name: extract release notes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v header="## [$version]" '
+            index($0, header) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md >release-notes.md
+          test -s release-notes.md
+
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists." >&2
+            exit 1
+          fi
+          gh release create "$tag" dist/* \
+            --draft \
+            --notes-file release-notes.md \
+            --title "$tag" \
+            --verify-tag
+          gh release edit "$tag" --draft=false

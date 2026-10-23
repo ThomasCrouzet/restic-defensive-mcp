@@ -14,7 +14,9 @@ codes:
 | 12 | wrong password |
 | 130 | cancelled |
 
-Tested during development with **restic 0.19.1**.
+CI runs the integration suite with **restic 0.17.1** and **restic 0.19.1**.
+The suite starts the real MCP executable and uses a temporary local repository.
+Remote backends require deployment-specific credentials and network checks.
 
 ## JSON formats used
 
@@ -77,6 +79,8 @@ roots, the caller must choose one explicitly.
   kill the direct restic process only (no full job-object tree walk in v0.1).
   Supported backends do not spawn `ssh`/`rclone` helpers.
 - Reaching the stdout or stderr byte cap cancels the child immediately.
+- On Unix, cancellation remains active after the group leader exits.
+  The runner also terminates remaining group members when inherited output pipes exceed the wait limit.
 
 ## Locks and cache
 
@@ -95,9 +99,16 @@ Child environment always uses:
 
 Parent process environment is not inherited for `RESTIC_*` or cloud secrets.
 
-Child `HOME` is set to `/var/empty`. Do not rely on `AWS_PROFILE` loading credentials from
-the operator home directory; pass keys (or `AWS_SHARED_CREDENTIALS_FILE` pointing at an
-absolute path) via `env_files`.
+The registry seals repository locations and backend environment values at startup.
+Changes to `repository_file` or `env_files` require a server restart.
+The password file path stays fixed, but restic reads the current password for each command.
+Keep replacement password files regular, private, and free of symlinks.
+
+Child `HOME` is set to `/var/empty`.
+Supply S3 credentials through `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `AWS_SESSION_TOKEN` in private `env_files`.
+S3 configuration requires a nonempty key pair. Instance-role credentials and anonymous access are unsupported.
+The server rejects `AWS_PROFILE` and `AWS_SHARED_CREDENTIALS_FILE`.
+Shared credential profiles can execute helpers through `credential_process`, which violates the restricted process contract.
 
 On Unix, secret files are opened with `O_NOFOLLOW`, checked on the open file
 descriptor, and must be mode `0600` or stricter. Windows builds revalidate file

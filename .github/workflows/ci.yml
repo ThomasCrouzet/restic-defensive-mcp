@@ -3,6 +3,8 @@ name: ci
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
     inputs:
@@ -20,9 +22,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.26.10'
-  RESTIC_VERSION: '0.17.1'
-  GOVULNCHECK_VERSION: 'v1.6.0'
+  GO_VERSION: '1.27.3'
+  MIN_GO_VERSION: '1.26.10'
+  RESTIC_VERSIONS: '0.17.1 0.19.1'
+  GOVULNCHECK_VERSION: 'v1.9.0'
   GITLEAKS_VERSION: '8.30.1'
 
 jobs:
@@ -43,23 +46,28 @@ jobs:
       - name: download modules
         run: go mod download && go mod verify
 
+      - name: minimum Go build smoke
+        run: |
+          GOTOOLCHAIN="go${MIN_GO_VERSION}" go version
+          GOTOOLCHAIN="go${MIN_GO_VERSION}" go build -trimpath -o "$RUNNER_TEMP/restic-defensive-mcp-min-go" ./cmd/restic-defensive-mcp
+
       - name: gofmt
         run: |
           test -z "$(gofmt -l . | tee /dev/stderr)"
 
       - name: cache lint analysis
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/golangci-lint
-          key: lint-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-v2.12.2-${{ hashFiles('go.sum', '.golangci.yml') }}
+          key: lint-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-v2.15.0-${{ hashFiles('go.sum', '.golangci.yml') }}
 
       - name: lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         env:
           GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint
         with:
-          version: v2.12.2
-          args: --timeout=5m ./...
+          version: v2.15.0
+          args: --timeout=5m --build-tags=integration ./...
           skip-cache: true
 
       - name: test with race
@@ -69,25 +77,42 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.fuzz
         run: make fuzz-smoke
 
-      - name: install restic (pinned + checksum)
+      - name: install restic versions
         run: |
           set -euo pipefail
-          VER="${RESTIC_VERSION}"
-          ARCH=amd64
-          URL="https://github.com/restic/restic/releases/download/v${VER}/restic_${VER}_linux_${ARCH}.bz2"
-          curl -fsSL -o /tmp/restic.bz2 "$URL"
-          # Verify checksum from restic SHA256SUMS when available
-          SUMS_URL="https://github.com/restic/restic/releases/download/v${VER}/SHA256SUMS"
-          curl -fsSL -o /tmp/SHA256SUMS "$SUMS_URL"
-          EXPECT="$(grep "restic_${VER}_linux_${ARCH}.bz2" /tmp/SHA256SUMS | awk '{print $1}')"
-          echo "$EXPECT  /tmp/restic.bz2" | sha256sum -c -
-          bunzip2 -c /tmp/restic.bz2 > /tmp/restic
-          chmod +x /tmp/restic
-          sudo mv /tmp/restic /usr/local/bin/restic
-          restic version
+          arch=amd64
+          for ver in ${RESTIC_VERSIONS}; do
+            install_dir="$RUNNER_TEMP/restic-${ver}"
+            archive="$RUNNER_TEMP/restic-${ver}.bz2"
+            sums="$RUNNER_TEMP/restic-${ver}-SHA256SUMS"
+            asset="restic_${ver}_linux_${arch}.bz2"
+            base="https://github.com/restic/restic/releases/download/v${ver}"
+            mkdir -p "$install_dir"
+            curl -fsSL -o "$archive" "${base}/${asset}"
+            curl -fsSL -o "$sums" "${base}/SHA256SUMS"
+            expected="$(awk -v asset="$asset" '$2 == asset {print $1}' "$sums")"
+            test -n "$expected"
+            echo "$expected  $archive" | sha256sum -c -
+            bunzip2 -c "$archive" >"$install_dir/restic"
+            chmod +x "$install_dir/restic"
+            "$install_dir/restic" version
+          done
 
-      - name: integration test
-        run: go test -tags=integration -count=1 -timeout 5m -v .
+      - name: integration tests
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/restic-defensive-mcp-e2e"
+          mkdir -p "$artifact_dir"
+          for ver in ${RESTIC_VERSIONS}; do
+            echo "Testing with restic ${ver}"
+            command="GOMAXPROCS=2 GOFLAGS=-p=1 go test -tags=integration -count=1 -timeout 5m -v ."
+            PATH="$RUNNER_TEMP/restic-${ver}:$PATH" \
+              GOMAXPROCS=2 \
+              GOFLAGS=-p=1 \
+              RESTIC_MCP_ARTIFACT_DIR="$artifact_dir" \
+              RESTIC_MCP_E2E_COMMAND="$command" \
+              go test -tags=integration -count=1 -timeout 5m -v .
+          done
 
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
@@ -134,3 +159,11 @@ jobs:
 
       - name: scan git history
         run: ./gitleaks git . --redact --no-banner
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ci, secrets]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
