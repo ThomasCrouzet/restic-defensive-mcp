@@ -3,6 +3,7 @@ package repositories
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/ThomasCrouzet/restic-defensive-mcp/internal/audit"
@@ -76,6 +77,11 @@ func New(cfg *config.Config, runner restic.Runner, log *audit.Logger) (*Registry
 			}
 			extra = append(extra, pairs...)
 		}
+		if kind == restic.BackendS3 {
+			if err := requireStaticS3Credentials(extra); err != nil {
+				return nil, err
+			}
+		}
 		childEnv, err := restic.BuildChildEnv(restic.ChildEnvOpts{
 			Repository:   loc,
 			PasswordFile: rc.PasswordFile,
@@ -101,6 +107,29 @@ func New(cfg *config.Config, runner restic.Runner, log *audit.Logger) (*Registry
 		r.order = append(r.order, e.ID)
 	}
 	return r, nil
+}
+
+func requireStaticS3Credentials(extra []string) error {
+	var accessKey, secretKey bool
+	for _, entry := range extra {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || value == "" {
+			continue
+		}
+		switch key {
+		case "AWS_ACCESS_KEY_ID":
+			accessKey = true
+		case "AWS_SECRET_ACCESS_KEY":
+			secretKey = true
+		}
+	}
+	if !accessKey || !secretKey {
+		return apperr.New(
+			apperr.ConfigError,
+			"s3 backend requires non-empty AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
+		)
+	}
+	return nil
 }
 
 // Get returns an entry by id.
@@ -146,23 +175,40 @@ func (r *Registry) Run(ctx context.Context, repoID string, argv []string, expens
 	if err := restic.AssertArgvAllowed(argv); err != nil {
 		return nil, apperr.New(apperr.InternalError, "disallowed argv").WithCause(err)
 	}
+	start := time.Now()
+	if ctx.Err() != nil {
+		err := apperr.New(apperr.Cancelled, "request cancelled")
+		r.auditRun(repoID, argv[0], start, err)
+		return nil, err
+	}
 
-	// Acquire the repository slot first. Otherwise, several requests queued on
-	// one busy repository could consume every global slot and starve other
-	// repositories without running any work.
+	// Acquire the repository slot first and reject saturation without queuing.
+	// This bounds hostile concurrent requests at the configured command limits.
 	select {
 	case e.sem <- struct{}{}:
 		defer func() { <-e.sem }()
 	case <-ctx.Done():
-		return nil, apperr.New(apperr.Cancelled, "request cancelled")
+		err := apperr.New(apperr.Cancelled, "request cancelled")
+		r.auditRun(repoID, argv[0], start, err)
+		return nil, err
+	default:
+		err := apperr.New(apperr.ResourceBusy, "repository concurrency limit reached")
+		r.auditRun(repoID, argv[0], start, err)
+		return nil, err
 	}
 
-	// Global concurrency
+	// Reject global saturation and release the repository slot through defer.
 	select {
 	case r.global <- struct{}{}:
 		defer func() { <-r.global }()
 	case <-ctx.Done():
-		return nil, apperr.New(apperr.Cancelled, "request cancelled")
+		err := apperr.New(apperr.Cancelled, "request cancelled")
+		r.auditRun(repoID, argv[0], start, err)
+		return nil, err
+	default:
+		err := apperr.New(apperr.ResourceBusy, "global concurrency limit reached")
+		r.auditRun(repoID, argv[0], start, err)
+		return nil, err
 	}
 
 	timeout := r.limits.CommandTimeout
@@ -170,13 +216,20 @@ func (r *Registry) Run(ctx context.Context, repoID string, argv []string, expens
 		timeout = r.limits.ExpensiveCommandTimeout
 	}
 
-	start := time.Now()
 	res, err := r.runner.Run(ctx, restic.RunRequest{
 		Argv:           argv,
 		Env:            e.childEnv,
 		Timeout:        timeout,
 		MaxOutputBytes: r.limits.MaxOutputBytes,
 	})
+	r.auditRun(repoID, argv[0], start, err)
+	return res, err
+}
+
+func (r *Registry) auditRun(repoID, command string, start time.Time, err error) {
+	if r.audit == nil {
+		return
+	}
 	status := "ok"
 	code := ""
 	if err != nil {
@@ -188,15 +241,12 @@ func (r *Registry) Run(ctx context.Context, repoID string, argv []string, expens
 			}
 		}
 	}
-	if r.audit != nil {
-		r.audit.Log(audit.Event{
-			Action:       "restic_run",
-			RepositoryID: repoID,
-			Status:       status,
-			ErrorCode:    code,
-			DurationMS:   time.Since(start).Milliseconds(),
-			Message:      argv[0],
-		})
-	}
-	return res, err
+	r.audit.Log(audit.Event{
+		Action:       "restic_run",
+		RepositoryID: repoID,
+		Status:       status,
+		ErrorCode:    code,
+		DurationMS:   time.Since(start).Milliseconds(),
+		Message:      command,
+	})
 }

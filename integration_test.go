@@ -23,7 +23,7 @@ import (
 
 func TestIntegrationRealRestic(t *testing.T) {
 	if _, err := exec.LookPath("restic"); err != nil {
-		t.Skip("restic not available")
+		t.Fatal("integration tests require restic")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

@@ -13,9 +13,22 @@ Errors remove secrets, and each tool reports its cost class.
 
 ## Requirements
 
-- Go 1.25+ (build)
-- restic **0.17.1+** on `PATH`, or an explicit `restic_binary` path. CI uses 0.17.1.
+- Go 1.26.10+ or Go 1.27.3+ for source builds. Use the latest patch of a supported Go release.
+- restic **0.17.1+** on `PATH`, or an explicit `restic_binary` path. CI covers 0.17.1 and 0.19.1.
 - An MCP client that supports local stdio servers
+
+## Install a release
+
+Download the archive for your system and `SHA256SUMS` from
+[GitHub Releases](https://github.com/ThomasCrouzet/restic-defensive-mcp/releases).
+Release binaries support Linux amd64/arm64, macOS arm64, and Windows amd64.
+Install restic separately.
+
+Compare the archive's SHA-256 checksum with its entry in `SHA256SUMS`.
+On Linux, use `sha256sum`; on macOS, use `shasum -a 256`.
+On Windows, use `Get-FileHash -Algorithm SHA256`.
+Extract the archive. On Linux and macOS, give the binary execute permission with `chmod +x` if necessary.
+Run the binary with `--version` before configuration.
 
 ## Install (from source)
 
@@ -89,6 +102,11 @@ See [config.example.yaml](config.example.yaml) for all settings:
 - Prefer `repository_file` + `password_file` over inline secrets
 - Repository locations and backend credentials are loaded and sealed at boot;
   changing their source files does not retarget a running server
+- The password file path stays fixed. Restic reads its contents for each command.
+  Restart the server after repository location or backend credential changes.
+- S3 repositories require nonempty `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` values in `env_files`.
+  `AWS_SESSION_TOKEN` is optional. Instance-role credentials and anonymous S3 access are unsupported.
+  `AWS_PROFILE` and `AWS_SHARED_CREDENTIALS_FILE` are rejected because credential profiles can execute helpers.
 - `allowed_hosts`, `allowed_tags`, and `allowed_paths` enforce access restrictions
 - Empty allowlists mean **no restriction** for that dimension; the server logs a
   boot-time warning (`empty_allowlist`) so operators notice
@@ -144,10 +162,11 @@ This server:
 make demo
 ```
 
-The demo uses in-memory MCP and real restic commands against a temporary repository.
+The demo starts the MCP executable through stdio and uses real restic commands against a temporary repository.
 `internal/testrepo` creates two backups and removes the fixture after the run.
-The suite calls all seven tools and checks path denial and the absence of mutation tools.
-It does not start the MCP executable or restore file contents.
+The suite calls all seven tools and rejects paths outside the allowlist.
+`make integration` also runs the in-memory MCP regression suite.
+These tests inspect metadata. They do not restore file contents.
 Go can download modules on a new checkout.
 
 ## Development
@@ -158,9 +177,12 @@ make lint
 make test          # local regression tests
 make race          # race detector
 make fuzz-smoke    # short run of every fuzz target
-make integration   # real restic temp repo (requires restic)
+make integration   # executable and in-memory MCP with real restic
 make vet
 ```
+
+See [Testing](docs/testing.md) for coverage, local artifacts, and repeatable commands.
+See [Releasing](docs/releasing.md) for the publication procedure and CI gates.
 
 ## Dependencies
 

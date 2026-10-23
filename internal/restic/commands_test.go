@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	apperr "github.com/ThomasCrouzet/restic-defensive-mcp/internal/errors"
 )
 
 func TestBuildSnapshotsArgv(t *testing.T) {
@@ -224,6 +226,42 @@ func TestChildEnvRejectsDuplicateBackendKeys(t *testing.T) {
 	}
 }
 
+func TestChildEnvRejectsProcessCapableAWSProfileKeys(t *testing.T) {
+	_, err := BuildChildEnv(ChildEnvOpts{
+		Repository:   "/srv/backups/repo",
+		PasswordFile: "/run/secrets/pass",
+		ExtraEnv: []string{
+			"AWS_ACCESS_KEY_ID=test-id",
+			"AWS_SECRET_ACCESS_KEY=test-key",
+			"AWS_SESSION_TOKEN=test-token",
+			"AWS_REGION=eu-west-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("static AWS credentials must remain allowed: %v", err)
+	}
+
+	for _, key := range []string{"AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE"} {
+		t.Run(key, func(t *testing.T) {
+			_, err := BuildChildEnv(ChildEnvOpts{
+				Repository:   "/srv/backups/repo",
+				PasswordFile: "/run/secrets/pass",
+				ExtraEnv:     []string{key + "=/run/secrets/aws"},
+			})
+			if err == nil {
+				t.Fatalf("expected %s rejection", key)
+			}
+
+			_, err = LoadEnvFile("ignored", func(string) ([]byte, error) {
+				return []byte(key + "=/run/secrets/aws\n"), nil
+			})
+			if err == nil {
+				t.Fatalf("expected %s rejection from env file", key)
+			}
+		})
+	}
+}
+
 func TestMapExitCodes(t *testing.T) {
 	cases := map[int]string{
 		10:  "repository_unavailable",
@@ -241,6 +279,24 @@ func TestMapExitCodes(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "hunter2") {
 			t.Fatal("password leaked in error")
+		}
+	}
+}
+
+func TestMapExitCodeOmitsGenericStderrDetail(t *testing.T) {
+	cases := []string{
+		`Get "https://s3.private.example/secret-bucket/config": access denied`,
+		`Get "https://rest.private.example/repository/config": access denied`,
+		`B2 bucket secret-bucket at api.backblazeb2.com returned an error`,
+	}
+	for _, stderr := range cases {
+		err := MapExitCode(1, []byte(stderr))
+		ae, ok := apperr.As(err)
+		if !ok || ae.Code != apperr.InternalError {
+			t.Fatalf("want internal_error, got %v", err)
+		}
+		if ae.Detail != "" {
+			t.Fatalf("generic restic stderr reached client detail: %q", ae.Detail)
 		}
 	}
 }
@@ -393,6 +449,30 @@ func TestParseStats(t *testing.T) {
 	s, err := ParseStats([]byte(raw))
 	if err != nil || s.TotalSize != 100 {
 		t.Fatalf("%+v %v", s, err)
+	}
+}
+
+func TestParseStatsRejectsMissingOrInvalidTotalSize(t *testing.T) {
+	cases := []string{
+		`null`,
+		`{}`,
+		`{"unrelated":1}`,
+		`{"total_file_count":0,"snapshots_count":0}`,
+		`{"total_size":null}`,
+		`{"total_size":"0"}`,
+	}
+	for _, raw := range cases {
+		if _, err := ParseStats([]byte(raw)); !apperr.IsCode(err, apperr.ProtocolError) {
+			t.Fatalf("want protocol_error for %s, got %v", raw, err)
+		}
+	}
+
+	stats, err := ParseStats([]byte(`{"total_size":0,"total_file_count":0,"snapshots_count":0}`))
+	if err != nil {
+		t.Fatalf("explicit zero total_size must be valid: %v", err)
+	}
+	if stats.TotalSize != 0 {
+		t.Fatalf("total_size=%d, want 0", stats.TotalSize)
 	}
 }
 

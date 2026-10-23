@@ -355,6 +355,14 @@ func ParseStats(data []byte) (*StatsResult, error) {
 	if len(data) == 0 {
 		return nil, apperr.New(apperr.ProtocolError, "empty stats output")
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, apperr.New(apperr.ProtocolError, "invalid stats JSON").WithCause(err)
+	}
+	totalSize, ok := fields["total_size"]
+	if !ok || bytes.Equal(bytes.TrimSpace(totalSize), []byte("null")) {
+		return nil, apperr.New(apperr.ProtocolError, "stats total_size missing")
+	}
 	var s StatsResult
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, apperr.New(apperr.ProtocolError, "invalid stats JSON").WithCause(err)

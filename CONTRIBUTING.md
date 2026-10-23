@@ -13,21 +13,25 @@ Thanks for considering a contribution.
 ## Development setup
 
 ```bash
-go version   # Go 1.25+
+go version   # Go 1.26.10+ or Go 1.27.3+
 restic version
 make fmt
 make lint
 make test
 make race
-make integration   # if restic is installed
+make integration   # requires restic 0.17.1+
 ```
+
+Use the latest patch of a supported Go release.
+Install restic before the integration suite. A missing binary is a test failure.
+See [Testing](docs/testing.md) for test boundaries and artifact requirements.
 
 ## Pull requests
 
 1. Fork and branch from `main`.
 2. Keep commits atomic and messages imperative ("Add path allowlist fuzz").
 3. Include tests for behavior changes.
-4. Run `gofmt`, `go vet`, `go test ./...`, and `go test -race ./...`.
+4. Run formatting, lint, race, and integration checks from [Testing](docs/testing.md).
 5. Update docs when tool contracts or security properties change.
 
 ## Security-sensitive changes
@@ -61,3 +65,8 @@ Production code must not call restic `init` or `backup`. Those exist only in
 
 Follow the testing policy in [AGENTS.md](AGENTS.md).
 Never write unit tests after implementation.
+
+## Releases
+
+Use the procedure in [Releasing](docs/releasing.md).
+Keep test reports in local storage. Publish only release deliverables on GitHub.

@@ -20,3 +20,6 @@
 - Use: invoked as an external process; not linked into this binary
 
 Run `go list -m all` and consult each module's LICENSE for the full dependency tree.
+
+Release archives include the project license and a `licenses` directory.
+That directory contains unmodified license and notice files from Go and the dependency modules.

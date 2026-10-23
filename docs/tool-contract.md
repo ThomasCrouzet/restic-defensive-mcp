@@ -25,6 +25,9 @@ Errors set MCP `isError` and return:
 }
 ```
 
+Generic restic failures return `internal_error` without child stderr details.
+Backend errors can contain repository locations even when they contain no password.
+
 ## Error codes
 
 | Code | Meaning |
@@ -39,6 +42,7 @@ Errors set MCP `isError` and return:
 | `unsupported_backend` | SFTP/rclone/other |
 | `authentication_failed` | Restic exit 12 |
 | `repository_locked` | Restic exit 11 |
+| `resource_busy` | Repository or global command capacity is full; retry after a delay |
 | `repository_unavailable` | Restic exit 10 (repository does not exist) |
 | `timeout` | Command deadline exceeded |
 | `cancelled` | Caller cancelled the request (context cancelled) |
@@ -46,6 +50,10 @@ Errors set MCP `isError` and return:
 | `protocol_error` | Unexpected restic JSON |
 | `internal_error` | Other failure |
 | `config_error` | Boot/config only |
+
+The server rejects excess commands immediately when a concurrency limit is full.
+It does not keep an unbounded command queue.
+Clients can retry `resource_busy` errors with a delay and a limited retry count.
 
 ## Tools
 

@@ -50,16 +50,25 @@ treated as potentially compromised, confused, or hostile.
 - Child process environment is rebuilt from an allowlist; parent
   `RESTIC_*` and cloud credentials are not inherited.
 - `RESTIC_PASSWORD_COMMAND` is never supported.
+- `AWS_PROFILE` and `AWS_SHARED_CREDENTIALS_FILE` are rejected.
+  Shared credential profiles can execute external helpers through `credential_process`.
+  Supply static AWS credentials through private `env_files` instead.
+- S3 repositories require a nonempty static AWS key pair at startup.
+  This prevents fallback to host instance-role credentials through the metadata service.
 - Stdout is MCP JSON-RPC only; operational logs go to stderr.
 - Outputs are size-bounded, sanitized for control characters, and redacted
   for common secret patterns.
-- Child stderr also redacts exact sealed repository and credential values
-  before it can enter a structured error.
+- Internal process results redact exact sealed repository and credential values from child stderr.
+- Generic child failures return a fixed message without stderr details.
+  This prevents disclosure when a backend changes the format of a repository URL in an error.
 - Reaching an output cap cancels the child immediately; it does not merely
   stop buffering while restic continues running.
 - Audit logs avoid full file paths by default.
 - Pre-restic policy denials (`not_allowed`) and unknown `repository_id` are
   audit-logged as `tool_rejected` events (no full paths).
+  Unknown repository identifiers are omitted from audit records.
+- Commands that exceed repository or global concurrency limits return `resource_busy` immediately.
+  The registry does not keep waiting commands.
 
 ### Non-guarantees / residual risk
 
@@ -72,9 +81,12 @@ treated as potentially compromised, confused, or hostile.
   `allowed_paths` list exposes all snapshot path metadata to the client.
   At boot the server emits `empty_allowlist` warnings on stderr for each
   unrestricted dimension; semantics stay unrestricted (warn, do not fail).
-- Backend credential injection uses a scrubbed child env with `HOME=/var/empty`.
-  `AWS_PROFILE` alone will not load `~/.aws/credentials`; use env key files or
-  `AWS_SHARED_CREDENTIALS_FILE` with an absolute path.
+- Backend credential injection uses a scrubbed child environment with `HOME=/var/empty`.
+  S3 credentials use `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `AWS_SESSION_TOKEN` from private `env_files`.
+- The registry seals the password file path, not its contents.
+  Restic reads the file for each command, which permits password replacement without a server restart.
+  Operators must keep replacement files private, regular, and free of symlinks.
+  Repository location and backend credential changes require a server restart.
 - A compromised host process can still read the same secret files the server
   can read. This server reduces client blast radius; it does not replace OS
   isolation.
@@ -103,6 +115,8 @@ treated as potentially compromised, confused, or hostile.
 | Stderr contains password | Redaction + structured error codes |
 | Env inheritance of credentials | Scrubbed child env |
 | SFTP/rclone helper spawn | Backend rejected at registry build |
+| AWS profile executes `credential_process` | Profile and shared credential file environment keys rejected |
+| S3 falls back to host instance credentials | Nonempty static AWS key pair required at startup |
 | DoS via expensive commands | Timeouts, concurrency=1 per repo, cost labels |
 | Symlink secret files | Rejected at open; Unix uses `O_NOFOLLOW` and fd revalidation |
 | Indirect mutation via argv | Closed subcommand set + AST test |
@@ -110,6 +124,7 @@ treated as potentially compromised, confused, or hostile.
 | Multi-root `find` has ambiguous path scope | Caller must select one allowlisted path |
 | Test harness `init`/`backup` | Isolated in `internal/testrepo`; not MCP tools |
 | Timeout kill leaves Windows grandchildren | Direct process kill only; supported backends spawn no helpers |
+| Unix descendant holds inherited output pipes | Cancellation watcher and pipe timeout terminate the process group |
 
 ### Local effects of inspection
 

@@ -21,9 +21,11 @@ Only `internal/testrepo` can initialize temporary repositories or create test ba
 
 Run `GOMAXPROCS=2 go test -p 1 -race -count=1 ./...` for local regression checks.
 Run `GOMAXPROCS=2 GOFLAGS=-p=1 make integration` with a local restic binary.
-The integration suite uses in-memory MCP, real restic commands, and a temporary repository with two backups.
-It does not start the MCP executable or restore file contents.
+The integration suite uses in-memory MCP and the MCP executable over stdio with real restic commands.
+Its temporary repository contains two backups. The suite does not restore file contents.
 Keep isolated checks for policy projection, ambiguous snapshots, command injection, environment sealing, output limits, audit redaction, and malformed responses.
 The fixture removes its temporary repository after the run.
 Save the integration log, restic version, fixture description, and required run metadata outside the repository.
-The suite has no persistent E2E artifact directory.
+The executable suite retains local protocol evidence outside the repository.
+See `docs/testing.md` for artifact settings and test boundaries.
+Never upload reports, traces, or SARIF files to GitHub. Keep release deliverables separate.

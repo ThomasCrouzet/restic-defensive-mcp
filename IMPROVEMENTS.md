@@ -2,31 +2,25 @@
 
 These items preserve the inspection-only contract in [SECURITY.md](SECURITY.md).
 
-## P1: Verify the complete executable path
-
-- Component: `cmd/restic-defensive-mcp`, `internal/testrepo`.
-- Benefit: detect startup, version-probe, and stdio integration failures.
-- Completion: a child process lists and browses two temporary snapshots.
-  The transcript proves that denied paths and ambiguous IDs expose no metadata.
-  Repository writes remain confined to the existing test fixture helper.
-
-## P1: Verify process termination under hostile output
-
-- Component: `internal/restic/runner.go`, `process_unix.go`.
-- Benefit: verify cancellation beyond fake runner responses.
-- Completion: a disposable child fills stdout or stderr, or holds a pipe open.
-  The check proves bounded output, bounded termination, and reusable concurrency slots.
-
-## P2: Make credential rotation boundaries explicit
-
-- Component: `internal/repositories/registry.go`, `internal/config`.
-- Benefit: distinguish sealed repository and backend settings from password-file rotation.
-- Completion: an executable fixture verifies accepted password rotation and rejects
-  attempts to retarget the sealed repository. Documentation states the boundary.
-
-## P2: Retain pagination and policy evidence
+## P2: Extend executable policy scenarios
 
 - Component: `internal/mcpserver/server.go`, `internal/policy/paths.go`.
 - Benefit: demonstrate useful results under mixed visible and hidden snapshot roots.
-- Completion: protocol scenarios cover page limits, nested allowlists, empty matches,
-  and whole-snapshot statistics restrictions with retained JSON results.
+- Completion: executable protocol scenarios cover nested allowlists and whole-snapshot statistics restrictions.
+  Retained JSON results show which metadata remains visible.
+- Existing evidence: executable tests cover pagination, empty matches, and path denial.
+  Isolated policy tests cover mixed roots and ambiguous snapshot prefixes.
+
+## P2: Exercise native Windows behavior
+
+- Component: secret-file handling, process cancellation, and executable integration.
+- Benefit: detect runtime differences that cross-compilation cannot find.
+- Completion: a Windows runner executes the stdio suite and records local results.
+  Its fixture uses private NTFS ACLs and confirms direct-process cancellation.
+
+## P2: Exercise remote backend deployment boundaries
+
+- Component: S3, B2, and REST backend integration.
+- Benefit: detect authentication, TLS, and network differences from local repositories.
+- Completion: disposable services provide controlled credentials and network failures.
+  The executable returns safe errors without exposing repository locations or credentials.
