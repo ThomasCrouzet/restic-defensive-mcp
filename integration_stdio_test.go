@@ -319,14 +319,29 @@ func TestExecutableStdioEndToEnd(t *testing.T) {
 	})
 	var find e2eFindData
 	unmarshalData(t, findEnvelope, &find)
-	if find.Count != 1 || len(find.Groups) != 1 || len(find.Groups[0].Matches) != 1 {
+	if find.Count != 3 || len(find.Groups) != 1 || len(find.Groups[0].Matches) != 3 {
 		t.Fatalf("find result = %+v", find)
 	}
-	findPath := find.Groups[0].Matches[0].Path
-	if filepath.Base(findPath) != "hello.txt" || !strings.HasPrefix(findPath, selectedPath) {
-		t.Fatalf("find path = %q, want hello.txt under %q", findPath, selectedPath)
+	names := make(map[string]string, len(find.Groups[0].Matches))
+	for _, match := range find.Groups[0].Matches {
+		if !strings.HasPrefix(match.Path, selectedPath) {
+			t.Fatalf("find path escaped scope: %+v", match)
+		}
+		if match.Name == "" {
+			t.Fatalf("find match has empty public name: %+v", match)
+		}
+		if match.Name != filepath.Base(match.Path) {
+			t.Fatalf("find name = %q, want derived %q from %q", match.Name, filepath.Base(match.Path), match.Path)
+		}
+		names[match.Name] = match.Path
+	}
+	for _, want := range []string{"hello.txt", "with space.txt", "café.txt"} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("find names %v omit %q", names, want)
+		}
 	}
 	artifact.check("observable find result")
+	artifact.check("find match names derived from validated paths")
 
 	emptyFindEnvelope := callE2ETool(t, ctx, session, artifact, "find_files", map[string]any{
 		"repository_id": "tmp-local",

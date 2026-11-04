@@ -91,6 +91,14 @@ func Create(ctx context.Context, resticBinary string) (*Fixture, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	if err := os.WriteFile(filepath.Join(f.DataDir1, "with space.txt"), []byte("spaced name\n"), 0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(f.DataDir1, "café.txt"), []byte("unicode name\n"), 0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Join(f.DataDir1, "subdir"), 0o700); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -101,6 +109,14 @@ func Create(ctx context.Context, resticBinary string) (*Fixture, error) {
 	}
 	// Tree 2 (second snapshot will add a file)
 	if err := os.WriteFile(filepath.Join(f.DataDir2, "hello.txt"), []byte("hello world\n"), 0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(f.DataDir2, "with space.txt"), []byte("spaced name\n"), 0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(f.DataDir2, "café.txt"), []byte("unicode name\n"), 0o600); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -259,12 +275,12 @@ func (f *Fixture) Describe() Description {
 	return Description{Host: f.Host, Backups: []BackupDescription{
 		{
 			Root:  "data1",
-			Files: []string{"hello.txt", "subdir/note.md"},
+			Files: []string{"café.txt", "hello.txt", "subdir/note.md", "with space.txt"},
 			Tags:  []string{"daily", "test"},
 		},
 		{
 			Root:  "data2",
-			Files: []string{"extra.log", "hello.txt"},
+			Files: []string{"café.txt", "extra.log", "hello.txt", "with space.txt"},
 			Tags:  []string{"weekly", "test"},
 		},
 	}}

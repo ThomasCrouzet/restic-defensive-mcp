@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -330,9 +331,16 @@ func ParseFind(data []byte, maxResults int) (groups []FindGroup, total int, trun
 				truncated = true
 				break
 			}
+			// restic's find --json omits the match name. Derive it from the
+			// already validated POSIX snapshot path rather than the host path
+			// separator, so the public result matches browse_snapshot.
+			name := m.Name
+			if name == "" {
+				name = path.Base(cleanedPath)
+			}
 			fg.Matches = append(fg.Matches, FindMatch{
 				Path:  cleanedPath,
-				Name:  redaction.SanitizeString(m.Name),
+				Name:  redaction.SanitizeString(name),
 				Type:  redaction.SanitizeString(m.Type),
 				Size:  m.Size,
 				Mtime: m.Mtime.UTC(),
