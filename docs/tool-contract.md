@@ -129,6 +129,9 @@ narrow it further.
 
 Output: `{groups, count}` where `count` is the number of matches **after** path
 allowlist filtering (capped by `limit` / `max_find_results`).
+Each match includes `name`, derived from the validated POSIX snapshot path with
+`path.Base` when restic omits it; `name` therefore uses the same spelling as
+`browse_snapshot`, including spaces and Unicode.
 `truncated` is true only when additional visible matches were omitted.
 The server first selects visible snapshot IDs, then filters and limits matches.
 With one configured root, an omitted `path` uses that root automatically.

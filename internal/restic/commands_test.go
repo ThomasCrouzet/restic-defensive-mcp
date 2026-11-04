@@ -437,6 +437,30 @@ func TestParseFind(t *testing.T) {
 	}
 }
 
+func TestParseFindDerivesMissingNameFromValidatedPOSIXPath(t *testing.T) {
+	raw := `[{"hits":3,"snapshot":"aaaaaaaa","matches":[` +
+		`{"path":"/data/hello.txt","type":"file"},` +
+		`{"path":"/data/with space.txt","type":"file"},` +
+		`{"path":"/data/caf\u00e9.txt","type":"file"}]}]`
+	g, total, trunc, err := ParseFind([]byte(raw), 10)
+	if err != nil || trunc || total != 3 || len(g) != 1 {
+		t.Fatalf("g=%v total=%d trunc=%v err=%v", g, total, trunc, err)
+	}
+	want := []string{"hello.txt", "with space.txt", "café.txt"}
+	for i, match := range g[0].Matches {
+		if match.Name != want[i] {
+			t.Fatalf("match %d name = %q, want %q", i, match.Name, want[i])
+		}
+	}
+}
+
+func TestParseFindRejectsInvalidPathBeforeDerivingName(t *testing.T) {
+	raw := `[{"hits":1,"snapshot":"aaaaaaaa","matches":[{"path":"/data/../secret","type":"file"}]}]`
+	if _, _, _, err := ParseFind([]byte(raw), 10); err == nil {
+		t.Fatal("expected invalid path rejection before name derivation")
+	}
+}
+
 func TestParseFindRejectsMalformedGroup(t *testing.T) {
 	_, _, _, err := ParseFind([]byte(`[{"hits":1,"snapshot":"bad","matches":[]}]`), 10)
 	if err == nil {
