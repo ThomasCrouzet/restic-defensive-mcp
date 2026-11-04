@@ -78,7 +78,7 @@ Output `data`: array of `{id, label?, backend, allowed_hosts, allowed_tags, allo
 | `repository_id` | string | required |
 | `host` | string | must be allowlisted if set |
 | `tags` | string[] | each must be allowlisted |
-| `path` | string | absolute, allowlisted |
+| `path` | string | absolute, allowlisted; selects snapshots whose roots overlap it in either direction |
 | `limit` | int | capped by config |
 | `offset` | int | pagination |
 
@@ -133,8 +133,12 @@ Each match includes `name`, derived from the validated POSIX snapshot path with
 `path.Base` when restic omits it; `name` therefore uses the same spelling as
 `browse_snapshot`, including spaces and Unicode.
 `truncated` is true only when additional visible matches were omitted.
-The server first selects visible snapshot IDs, then filters and limits matches.
-With one configured root, an omitted `path` uses that root automatically.
+The server first selects visible snapshot IDs by root intersection, then filters
+and limits matches inside the requested scope. With one configured root, an
+omitted `path` uses that root automatically.
+Snapshot selection accepts both parent/child directions: a scope rooted at an
+allowlisted parent includes snapshots of child directories, and a child scope
+still selects a visible concrete snapshot whose root is that child.
 Multiple allowed roots require an explicit path so every search has one clear,
 locally enforced scope.
 

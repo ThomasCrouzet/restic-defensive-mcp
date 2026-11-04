@@ -484,13 +484,21 @@ func matchesSnapshotFilters(snapshot restic.Snapshot, host string, tags []string
 	if requestPath == "" {
 		return true
 	}
+	// A requested scope and a snapshot root overlap when either contains the
+	// other. Both directions are required: a search rooted at an allowlisted
+	// parent must select snapshots of its child directories, while a search in
+	// a child scope must still select a snapshot whose root is that child.
 	for _, snapshotPath := range snapshot.Paths {
 		cleaned, err := policy.CleanPath(snapshotPath)
-		if err == nil && pathIsUnderAllow(requestPath, cleaned) {
+		if err == nil && pathsOverlap(requestPath, cleaned) {
 			return true
 		}
 	}
 	return false
+}
+
+func pathsOverlap(a, b string) bool {
+	return pathIsUnderAllow(a, b) || pathIsUnderAllow(b, a)
 }
 
 func resolveVisibleSnapshot(

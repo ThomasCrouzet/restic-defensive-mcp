@@ -68,8 +68,11 @@ The pattern is passed after a `--` end-of-flags marker.
 
 Repeated restic `--path` filters use intersection semantics. `find_files`
 therefore selects policy-visible snapshots by concrete ID and enforces its
-single requested path locally. When a repository exposes multiple allowed
-roots, the caller must choose one explicitly.
+single requested path locally. A requested scope and a snapshot root overlap
+when either contains the other, so an allowlisted parent selects child
+snapshots while a child scope still selects its concrete snapshot. When a
+repository exposes multiple allowed roots, the caller must choose one
+explicitly.
 
 ## Process lifecycle (timeouts)
 
