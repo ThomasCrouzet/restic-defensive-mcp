@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"io"
 	"sort"
 	"time"
 
@@ -34,6 +35,9 @@ func makeCapabilities(deps Deps) func(context.Context, *mcp.CallToolRequest, emp
 				"max_nodes":                     lim.MaxNodes,
 				"max_find_results":              lim.MaxFindResults,
 				"max_output_bytes":              lim.MaxOutputBytes,
+				"max_scan_bytes":                lim.MaxScanBytes,
+				"max_decoded_entries":           lim.MaxDecodedEntries,
+				"max_response_bytes":            lim.MaxResponseBytes,
 				"max_concurrent_per_repo":       lim.MaxConcurrentPerRepo,
 				"max_concurrent_global":         lim.MaxConcurrentGlobal,
 				"metadata_cache_ttl_sec":        int(lim.MetadataCacheTTL.Seconds()),
@@ -47,13 +51,13 @@ func makeCapabilities(deps Deps) func(context.Context, *mcp.CallToolRequest, emp
 				"Callers cannot supply repository URLs, backends, or secret paths.",
 			},
 		}
-		return okResult(restic.CostLight, data, false)
+		return okResult(deps, restic.CostLight, data, false)
 	}
 }
 
 func makeListRepositories(deps Deps) func(context.Context, *mcp.CallToolRequest, listReposIn) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ listReposIn) (*mcp.CallToolResult, any, error) {
-		return okResult(restic.CostLight, deps.Registry.List(), false)
+		return okResult(deps, restic.CostLight, deps.Registry.List(), false)
 	}
 }
 
@@ -145,7 +149,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 				}
 				out["next_cursor"] = next
 			}
-			return okResult(restic.CostLight, out, truncated, metadataCacheWarning(observation)...)
+			return okResult(deps, restic.CostLight, out, truncated, metadataCacheWarning(observation)...)
 		}
 
 		opts := restic.SnapshotsOpts{}
@@ -267,7 +271,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			}
 			out["next_cursor"] = next
 		}
-		return okResult(restic.CostLight, out, truncated, metadataCacheWarning(observation)...)
+		return okResult(deps, restic.CostLight, out, truncated, metadataCacheWarning(observation)...)
 	}
 }
 
@@ -385,7 +389,7 @@ func makeGetSnapshot(deps Deps) func(context.Context, *mcp.CallToolRequest, getS
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, err)
 		}
-		return okResult(restic.CostLight, publicSnapshot(e, snapshot), false)
+		return okResult(deps, restic.CostLight, publicSnapshot(e, snapshot), false)
 	}
 }
 
@@ -461,46 +465,46 @@ func makeBrowseSnapshot(deps Deps) func(context.Context, *mcp.CallToolRequest, b
 			return failTool(deps, tool, in.RepositoryID, err)
 		}
 
-		nodes, parseTruncated, err := browseVisibleNodes(
-			ctx, deps, e, in.RepositoryID, snapshot.ID, state.Path, state.Recursive,
+		nodes, err := browseVisibleNodes(
+			ctx, deps, e, in.RepositoryID, snapshot.ID, state.Path, state.Recursive, state.Offset, limit,
 		)
 		if err != nil {
 			return errTool(err), nil, nil
 		}
-		total := len(nodes)
-		start := state.Offset
-		if start > total {
-			start = total
-		}
-		end := start + limit
-		if end > total {
-			end = total
-		}
-		page := nodes[start:end]
-		truncated := end < total || parseTruncated
+		truncated := nodes.Stats.More || nodes.Stats.BudgetExhausted
 		out := map[string]any{
-			"path":       state.Path,
-			"nodes":      page,
-			"count":      len(page),
-			"total":      total,
-			"recursive":  state.Recursive,
-			"incomplete": parseTruncated,
+			"path":             state.Path,
+			"nodes":            nodes.Nodes,
+			"count":            len(nodes.Nodes),
+			"recursive":        state.Recursive,
+			"incomplete":       nodes.Stats.BudgetExhausted,
+			"scan_complete":    nodes.Stats.Complete,
+			"budget_exhausted": nodes.Stats.BudgetExhausted,
 		}
-		if end < total {
+		if nodes.Stats.Complete {
+			// The total is published only after the authorized scan finished.
+			// A page-boundary stop leaves it unknown rather than guessing.
+			out["total"] = nodes.Stats.AcceptedEntries
+		}
+		if nodes.Stats.More && len(nodes.Nodes) > 0 {
 			next, cursorErr := deps.cursors.issue(cursorState{
 				Tool:        tool,
 				Repository:  in.RepositoryID,
 				Path:        state.Path,
 				Recursive:   state.Recursive,
 				SnapshotIDs: state.SnapshotIDs,
-				Offset:      end,
+				Offset:      state.Offset + len(nodes.Nodes),
 			})
 			if cursorErr != nil {
 				return errTool(cursorErr), nil, nil
 			}
 			out["next_cursor"] = next
 		}
-		return okResult(restic.CostModerate, out, truncated)
+		var warnings []string
+		if nodes.Stats.BudgetExhausted {
+			warnings = append(warnings, "scan budget exhausted; this page is incomplete")
+		}
+		return okResult(deps, restic.CostModerate, out, truncated, warnings...)
 	}
 }
 
@@ -510,37 +514,47 @@ func browseVisibleNodes(
 	e *repositories.Entry,
 	repoID, snapshotID, path string,
 	recursive bool,
-) ([]restic.Node, bool, error) {
+	skip, limit int,
+) (restic.LSScanResult, error) {
 	argv, err := restic.BuildLSArgv(restic.LSOpts{
 		SnapshotID: snapshotID,
 		Dirs:       []string{path},
 		Recursive:  recursive,
 	})
 	if err != nil {
-		return nil, false, apperr.New(apperr.InvalidArgument, err.Error())
-	}
-	res, err := deps.Registry.Run(ctx, repoID, argv, true)
-	if err != nil {
-		return nil, false, err
+		return restic.LSScanResult{}, apperr.New(apperr.InvalidArgument, err.Error())
 	}
 	lim := deps.Registry.Limits()
-	nodes, parseTruncated, err := restic.ParseLS(res.Stdout, lim.MaxOutputBytes)
-	if err != nil {
-		return nil, false, err
-	}
-	filtered := make([]restic.Node, 0, len(nodes))
-	for _, n := range nodes {
-		cleaned, cleanErr := policy.CleanPath(n.Path)
-		if cleanErr != nil || !e.Paths.IsAllowed(cleaned) || !pathIsUnderAllow(cleaned, path) {
-			continue
+	var scan restic.LSScanResult
+	_, err = deps.Registry.RunScan(ctx, repoID, argv, true, func(stdout io.Reader) (bool, error) {
+		scan, err = restic.ScanLS(
+			stdout,
+			restic.ScanLimits{MaxBytes: lim.MaxScanBytes, MaxDecodedEntries: lim.MaxDecodedEntries},
+			skip,
+			limit,
+			func(node restic.Node) bool {
+				cleaned, cleanErr := policy.CleanPath(node.Path)
+				if cleanErr != nil {
+					return false
+				}
+				return e.Paths.IsAllowed(cleaned) && pathIsUnderAllow(cleaned, path)
+			},
+		)
+		if err != nil {
+			return false, err
 		}
-		n.Path = redaction.SanitizeAndRedact(cleaned)
-		n.Name = redaction.SanitizeAndRedact(n.Name)
-		n.Type = redaction.SanitizeAndRedact(n.Type)
-		n.Mode = redaction.SanitizeAndRedact(n.Mode)
-		filtered = append(filtered, n)
+		return scan.Stats.StoppedEarly, nil
+	})
+	if err != nil {
+		return restic.LSScanResult{}, err
 	}
-	return filtered, parseTruncated, nil
+	for i := range scan.Nodes {
+		scan.Nodes[i].Path = redaction.SanitizeAndRedact(scan.Nodes[i].Path)
+		scan.Nodes[i].Name = redaction.SanitizeAndRedact(scan.Nodes[i].Name)
+		scan.Nodes[i].Type = redaction.SanitizeAndRedact(scan.Nodes[i].Type)
+		scan.Nodes[i].Mode = redaction.SanitizeAndRedact(scan.Nodes[i].Mode)
+	}
+	return scan, nil
 }
 
 func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFilesIn) (*mcp.CallToolResult, any, error) {
@@ -658,40 +672,37 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 
 		if len(snapshots) == 0 {
 			cost := restic.CostExpensive
-			return okResult(cost, map[string]any{"groups": []restic.FindGroup{}, "count": 0, "total": 0}, false)
+			return okResult(deps, cost, map[string]any{
+				"groups":           []restic.FindGroup{},
+				"count":            0,
+				"total":            0,
+				"incomplete":       false,
+				"scan_complete":    true,
+				"budget_exhausted": false,
+				"window":           windowOutput(state.After, state.Before),
+			}, false)
 		}
 
-		argv, err := restic.BuildFindArgv(restic.FindOpts{
-			Pattern:     state.Pattern,
-			IgnoreCase:  state.IgnoreCase,
-			SnapshotIDs: state.SnapshotIDs,
-		})
-		if err != nil {
-			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, err.Error()))
-		}
-		res, err := deps.Registry.Run(ctx, in.RepositoryID, argv, true)
+		scan, err := findVisibleGroups(ctx, deps, e, in.RepositoryID, snapshots, state, limit)
 		if err != nil {
 			return errTool(err), nil, nil
 		}
-		groups, _, parseTruncated, err := restic.ParseFind(res.Stdout, lim.MaxOutputBytes)
-		if err != nil {
-			return errTool(err), nil, nil
-		}
-		page, visibleCount, totalVisible, err := paginateFindGroups(groups, snapshots, e, state.Path, state.Offset, limit)
-		if err != nil {
-			return errTool(err), nil, nil
-		}
+		visibleCount := scan.Stats.PageEntries
+		truncated := scan.Stats.More || scan.Stats.BudgetExhausted
 		out := map[string]any{
-			"groups":     page,
-			"count":      visibleCount,
-			"incomplete": parseTruncated,
-			"window":     windowOutput(state.After, state.Before),
+			"groups":           scan.Groups,
+			"count":            visibleCount,
+			"incomplete":       scan.Stats.BudgetExhausted,
+			"scan_complete":    scan.Stats.Complete,
+			"budget_exhausted": scan.Stats.BudgetExhausted,
+			"window":           windowOutput(state.After, state.Before),
 		}
-		if !parseTruncated {
-			out["total"] = totalVisible
+		if scan.Stats.Complete {
+			// Publish a total only after the authorized scan completed. An
+			// early page-boundary stop leaves it unknown rather than guessing.
+			out["total"] = scan.Stats.AcceptedEntries
 		}
-		truncated := parseTruncated || state.Offset+visibleCount < totalVisible
-		if !parseTruncated && state.Offset+visibleCount < totalVisible {
+		if scan.Stats.More && visibleCount > 0 {
 			next, cursorErr := deps.cursors.issue(cursorState{
 				Tool:        tool,
 				Repository:  in.RepositoryID,
@@ -710,87 +721,71 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 		if len(state.SnapshotIDs) == 1 {
 			cost = restic.CostModerate
 		}
-		return okResult(cost, out, truncated)
+		var warnings []string
+		if scan.Stats.BudgetExhausted {
+			warnings = append(warnings, "scan budget exhausted; this page is incomplete")
+		}
+		return okResult(deps, cost, out, truncated, warnings...)
 	}
 }
 
-func paginateFindGroups(
-	groups []restic.FindGroup,
-	snapshots []restic.Snapshot,
+func findVisibleGroups(
+	ctx context.Context,
+	deps Deps,
 	e *repositories.Entry,
-	scopePath string,
-	offset, limit int,
-) ([]restic.FindGroup, int, int, error) {
-	type orderedGroup struct {
-		snapshot string
-		matches  []restic.FindMatch
+	repoID string,
+	snapshots []restic.Snapshot,
+	state cursorState,
+	limit int,
+) (restic.FindScanResult, error) {
+	argv, err := restic.BuildFindArgv(restic.FindOpts{
+		Pattern:     state.Pattern,
+		IgnoreCase:  state.IgnoreCase,
+		SnapshotIDs: state.SnapshotIDs,
+	})
+	if err != nil {
+		return restic.FindScanResult{}, apperr.New(apperr.InvalidArgument, err.Error())
 	}
-	ordered := make([]orderedGroup, 0, len(groups))
-	totalVisible := 0
-	for _, g := range groups {
-		if !findGroupAuthorized(g.Snapshot, snapshots) {
-			continue
+	lim := deps.Registry.Limits()
+	var scan restic.FindScanResult
+	_, err = deps.Registry.RunScan(ctx, repoID, argv, true, func(stdout io.Reader) (bool, error) {
+		scan, err = restic.ScanFind(
+			stdout,
+			restic.ScanLimits{MaxBytes: lim.MaxScanBytes, MaxDecodedEntries: lim.MaxDecodedEntries},
+			state.Offset,
+			limit,
+			func(snapshot string, match restic.FindMatch) bool {
+				if !findGroupAuthorized(snapshot, snapshots) {
+					return false
+				}
+				cleaned, cleanErr := policy.CleanPath(match.Path)
+				if cleanErr != nil || !e.Paths.IsAllowed(cleaned) {
+					return false
+				}
+				return state.Path == "" || pathIsUnderAllow(cleaned, state.Path)
+			},
+		)
+		if err != nil {
+			return false, err
 		}
-		matches := make([]restic.FindMatch, 0, len(g.Matches))
-		for _, match := range g.Matches {
-			cleaned, cleanErr := policy.CleanPath(match.Path)
-			if cleanErr != nil || !e.Paths.IsAllowed(cleaned) {
-				continue
-			}
-			if scopePath != "" && !pathIsUnderAllow(cleaned, scopePath) {
-				continue
-			}
-			match.Path = redaction.SanitizeAndRedact(cleaned)
-			match.Name = redaction.SanitizeAndRedact(match.Name)
-			match.Type = redaction.SanitizeAndRedact(match.Type)
-			matches = append(matches, match)
-		}
-		if len(matches) == 0 {
-			continue
+		return scan.Stats.StoppedEarly, nil
+	})
+	if err != nil {
+		return restic.FindScanResult{}, err
+	}
+	for gi := range scan.Groups {
+		matches := scan.Groups[gi].Matches
+		for mi := range matches {
+			matches[mi].Path = redaction.SanitizeAndRedact(matches[mi].Path)
+			matches[mi].Name = redaction.SanitizeAndRedact(matches[mi].Name)
+			matches[mi].Type = redaction.SanitizeAndRedact(matches[mi].Type)
 		}
 		sort.SliceStable(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
-		ordered = append(ordered, orderedGroup{snapshot: g.Snapshot, matches: matches})
-		totalVisible += len(matches)
+		scan.Groups[gi].Matches = matches
+		scan.Groups[gi].Hits = uint64(len(matches))
 	}
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].snapshot < ordered[j].snapshot })
-	if offset > totalVisible {
-		offset = totalVisible
-	}
-	remaining := totalVisible - offset
-	pageLimit := limit
-	if pageLimit > remaining {
-		pageLimit = remaining
-	}
-	page := make([]restic.FindGroup, 0, len(ordered))
-	skipped := 0
-	collected := 0
-	for _, group := range ordered {
-		if collected >= pageLimit {
-			break
-		}
-		pageMatches := make([]restic.FindMatch, 0, len(group.matches))
-		for _, match := range group.matches {
-			if skipped < offset {
-				skipped++
-				continue
-			}
-			if collected >= pageLimit {
-				break
-			}
-			pageMatches = append(pageMatches, match)
-			collected++
-		}
-		if len(pageMatches) == 0 {
-			continue
-		}
-		snapshot := redaction.SanitizeString(group.snapshot)
-		page = append(page, restic.FindGroup{
-			Hits:     uint64(len(pageMatches)),
-			Snapshot: snapshot,
-			Matches:  pageMatches,
-		})
-	}
-	return page, collected, totalVisible, nil
+	sort.SliceStable(scan.Groups, func(i, j int) bool { return scan.Groups[i].Snapshot < scan.Groups[j].Snapshot })
+	return scan, nil
 }
 
 func findGroupAuthorized(groupID string, snapshots []restic.Snapshot) bool {
@@ -921,6 +916,6 @@ func makeRepositoryStats(deps Deps) func(context.Context, *mcp.CallToolRequest, 
 			"excluded_snapshots": excluded,
 			"window":             windowOutput(normalizedAfter, normalizedBefore),
 		}
-		return okResult(cost, out, false)
+		return okResult(deps, cost, out, false)
 	}
 }

@@ -35,6 +35,9 @@ type capabilitiesLimits struct {
 	MaxNodes                   int `json:"max_nodes"`
 	MaxFindResults             int `json:"max_find_results"`
 	MaxOutputBytes             int `json:"max_output_bytes"`
+	MaxScanBytes               int `json:"max_scan_bytes"`
+	MaxDecodedEntries          int `json:"max_decoded_entries"`
+	MaxResponseBytes           int `json:"max_response_bytes"`
 	MaxConcurrentPerRepo       int `json:"max_concurrent_per_repo"`
 	MaxConcurrentGlobal        int `json:"max_concurrent_global"`
 	MetadataCacheTTLSec        int `json:"metadata_cache_ttl_sec"`
@@ -116,22 +119,26 @@ type freshnessHiddenScope struct {
 }
 
 type browseData struct {
-	Path       string        `json:"path"`
-	Nodes      []restic.Node `json:"nodes"`
-	Count      int           `json:"count"`
-	Total      int           `json:"total"`
-	Recursive  bool          `json:"recursive"`
-	Incomplete bool          `json:"incomplete"`
-	NextCursor string        `json:"next_cursor,omitempty"`
+	Path            string        `json:"path"`
+	Nodes           []restic.Node `json:"nodes"`
+	Count           int           `json:"count"`
+	Total           *int          `json:"total,omitempty"`
+	Recursive       bool          `json:"recursive"`
+	Incomplete      bool          `json:"incomplete"`
+	ScanComplete    bool          `json:"scan_complete"`
+	BudgetExhausted bool          `json:"budget_exhausted"`
+	NextCursor      string        `json:"next_cursor,omitempty"`
 }
 
 type findData struct {
-	Groups     []restic.FindGroup `json:"groups"`
-	Count      int                `json:"count"`
-	Total      *int               `json:"total,omitempty"`
-	Incomplete bool               `json:"incomplete"`
-	Window     windowData         `json:"window"`
-	NextCursor string             `json:"next_cursor,omitempty"`
+	Groups          []restic.FindGroup `json:"groups"`
+	Count           int                `json:"count"`
+	Total           *int               `json:"total,omitempty"`
+	Incomplete      bool               `json:"incomplete"`
+	ScanComplete    bool               `json:"scan_complete"`
+	BudgetExhausted bool               `json:"budget_exhausted"`
+	Window          windowData         `json:"window"`
+	NextCursor      string             `json:"next_cursor,omitempty"`
 }
 
 type statsData struct {
@@ -164,11 +171,17 @@ type envelope struct {
 	Warnings  []string         `json:"warnings,omitempty"`
 }
 
-func okResult(cost restic.CostClass, data any, truncated bool, warnings ...string) (*mcp.CallToolResult, any, error) {
+func okResult(deps Deps, cost restic.CostClass, data any, truncated bool, warnings ...string) (*mcp.CallToolResult, any, error) {
 	env := envelope{Cost: cost, Data: data, Truncated: truncated, Warnings: warnings}
 	raw, err := json.Marshal(env)
 	if err != nil {
 		return errTool(apperr.New(apperr.InternalError, "encode failed")), nil, nil
+	}
+	if deps.maxResponseBytes > 0 && len(raw) > deps.maxResponseBytes {
+		return errTool(apperr.New(
+			apperr.ResponseLimitExceeded,
+			"public response exceeds configured max_response_bytes",
+		)), nil, nil
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(raw)}},

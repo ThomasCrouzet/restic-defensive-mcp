@@ -47,6 +47,7 @@ Backend errors can contain repository locations even when they contain no passwo
 | `timeout` | Command deadline exceeded |
 | `cancelled` | Caller cancelled the request (context cancelled) |
 | `output_limit_exceeded` | Stdout/stderr cap |
+| `response_limit_exceeded` | Encoded public response exceeds `max_response_bytes` |
 | `protocol_error` | Unexpected restic JSON |
 | `cursor_invalid` | Cursor is malformed, expired, already used, or belongs to another request |
 | `stale_selection` | A snapshot frozen in a cursor was removed or is no longer visible |
@@ -185,12 +186,15 @@ No file contents. For `latest`, the required path scopes selection and the
 concrete snapshot is fixed before the first cursor is issued; `host` can narrow
 it further. With a cursor, pass only `repository_id`, `cursor`, and optionally
 `limit`.
-Output also includes `total` (visible nodes in the bounded scan) and
-`incomplete` (the restic output reached its cap). `truncated` is true when
-another page exists or the scan is incomplete; `next_cursor` exists only while
-another visible page can be requested. Hidden nodes are filtered before the page
-offset, so they never consume the visible page budget. Each page re-runs `restic
-ls`; this is continuation, not backend pagination.
+Output also includes `count`, `incomplete`, `scan_complete`, and
+`budget_exhausted`. `incomplete` is true only when a scan budget ended the scan
+before the authorized stream was exhausted; `scan_complete` is true only after a
+normal end of stream. `total` is present only when `scan_complete` is true.
+`truncated` is true when another page exists or the scan is incomplete;
+`next_cursor` exists only while another visible page can be requested. Hidden
+nodes are filtered before the page offset, so they never consume the visible
+page budget. Each page re-runs `restic ls`; this is continuation, not backend
+pagination, and the scan stops once the page boundary is established.
 
 ### `find_files`
 
@@ -206,18 +210,22 @@ ls`; this is continuation, not backend pagination.
 | `after`/`before` | string | optional snapshot-creation window, `[after, before)`; not file modification time |
 | `cursor` | string | opaque continuation; carries the original filters |
 
-Output: `{groups, count, total?, incomplete, next_cursor?}` where `count` is the
-number of visible matches in this page. Each group's `hits` counts only that
-group's matches in this page; a group can span pages. `total` is published only
-after the underlying authorized scan completed, never for an incomplete scan.
-Each match includes `name`, derived from the validated POSIX snapshot path with
-`path.Base` when restic omits it; `name` therefore uses the same spelling as
+Output: `{groups, count, total?, incomplete, scan_complete, budget_exhausted, next_cursor?}`
+where `count` is the number of visible matches in this page. Each group's
+`hits` counts only that group's matches in this page; a group can span pages.
+`total` is published only after the underlying authorized scan completed
+(`scan_complete: true`), never for an incomplete scan or an early page-boundary
+stop. `incomplete` and `budget_exhausted` report that a raw-byte or decoded-entry
+ceiling ended the scan before the authorized stream was exhausted. Each match
+includes `name`, derived from the validated POSIX snapshot path with `path.Base`
+when restic omits it; `name` therefore uses the same spelling as
 `browse_snapshot`, including spaces and Unicode.
 With a cursor, pass only `repository_id`, `cursor`, and optionally `limit`.
 Hidden matches are filtered before the page offset. `truncated` is true when
 another visible page exists or the scan is incomplete. Cursors are single-use,
 expire after five minutes, and return `stale_selection` if a frozen snapshot was
-removed. Each page re-runs `restic find`; this is not backend pagination.
+removed. Each page re-runs `restic find`; this is not backend pagination, and the
+scan stops once the page boundary is established.
 The server first selects visible snapshot IDs by root intersection, then filters
 and limits matches inside the requested scope. With one configured root, an
 omitted `path` uses that root automatically.

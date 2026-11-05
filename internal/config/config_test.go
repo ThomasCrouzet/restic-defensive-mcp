@@ -212,6 +212,51 @@ func TestEmptyAllowlistWarnings(t *testing.T) {
 	}
 }
 
+func TestLimitDefaultsAndBounds(t *testing.T) {
+	dir := t.TempDir()
+	repoFile := filepath.Join(dir, "repo")
+	passFile := filepath.Join(dir, "pass")
+	mustWrite(t, repoFile, "/tmp/fake-repo\n", 0o600)
+	mustWrite(t, passFile, "secret\n", 0o600)
+	base := `
+version: 1
+repositories:
+  - id: local-test
+    repository_file: ` + repoFile + `
+    password_file: ` + passFile + `
+`
+	cfg, err := Parse([]byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Limits.MaxScanBytes != defaultMaxScanBytes ||
+		cfg.Limits.MaxDecodedEntries != defaultMaxDecodedEntries ||
+		cfg.Limits.MaxResponseBytes != defaultMaxResponseBytes {
+		t.Fatalf("new limit defaults not applied: %+v", cfg.Limits)
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"scan too small", "  max_scan_bytes: 1024\n"},
+		{"scan too large", "  max_scan_bytes: 100000000\n"},
+		{"decoded zero", "  max_decoded_entries: -1\n"},
+		{"decoded too large", "  max_decoded_entries: 2000000\n"},
+		{"response too small", "  max_response_bytes: 1024\n"},
+		{"response too large", "  max_response_bytes: 100000000\n"},
+	} {
+		body := "version: 1\nlimits:\n" + tc.body + `repositories:
+  - id: local-test
+    repository_file: ` + repoFile + `
+    password_file: ` + passFile + `
+`
+		if _, err := Parse([]byte(body)); err == nil {
+			t.Fatalf("%s: expected bounds rejection", tc.name)
+		}
+	}
+}
+
 func FuzzParse(f *testing.F) {
 	f.Add([]byte("version: 1\nrepositories: []\n"))
 	f.Add([]byte("version: 1\nrepositories:\n  - id: a\n    repository_file: /x\n    password_file: /y\n"))

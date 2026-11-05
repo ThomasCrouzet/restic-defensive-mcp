@@ -53,6 +53,10 @@ type ConfigPolicy struct {
 	MaxSnapshots         int
 	MaxNodes             int
 	MaxFindResults       int
+	MaxOutputBytes       int
+	MaxScanBytes         int
+	MaxDecodedEntries    int
+	MaxResponseBytes     int
 	MetadataCacheTTL     time.Duration
 	MetadataCacheMaxSize int
 }
@@ -311,6 +315,18 @@ func (f *Fixture) writeConfig(path, resticBinary, repositoryPath, envPath string
 	if policy.MaxFindResults == 0 {
 		policy.MaxFindResults = 100
 	}
+	if policy.MaxOutputBytes == 0 {
+		policy.MaxOutputBytes = 4194304
+	}
+	if policy.MaxScanBytes == 0 {
+		policy.MaxScanBytes = 16777216
+	}
+	if policy.MaxDecodedEntries == 0 {
+		policy.MaxDecodedEntries = 50000
+	}
+	if policy.MaxResponseBytes == 0 {
+		policy.MaxResponseBytes = 2097152
+	}
 	envFiles := ""
 	if envPath != "" {
 		envFiles = fmt.Sprintf("    env_files: [%q]\n", envPath)
@@ -323,7 +339,10 @@ limits:
   max_snapshots: %d
   max_nodes: %d
   max_find_results: %d
-  max_output_bytes: 4194304
+  max_output_bytes: %d
+  max_scan_bytes: %d
+  max_decoded_entries: %d
+  max_response_bytes: %d
   max_concurrent_per_repo: 1
   max_concurrent_global: 2
   metadata_cache_ttl: %s
@@ -338,6 +357,7 @@ repositories:
     allowed_tags: [%s]
     allowed_paths: [%s]
 %s`, resticBinary, policy.MaxSnapshots, policy.MaxNodes, policy.MaxFindResults,
+		policy.MaxOutputBytes, policy.MaxScanBytes, policy.MaxDecodedEntries, policy.MaxResponseBytes,
 		policy.MetadataCacheTTL.String(), policy.MetadataCacheMaxSize,
 		repositoryPath, f.PasswordFile, f.CacheDir,
 		quotedYAMLList(policy.AllowedHosts), quotedYAMLList(policy.AllowedTags), quotedYAMLList(policy.AllowedPaths),

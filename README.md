@@ -363,6 +363,7 @@ logs go to stderr. Details are in [SECURITY.md](SECURITY.md).
 | [Tool contract](docs/tool-contract.md) | Inputs, outputs, policies, costs, and error codes |
 | [Example configuration](config.example.yaml) | Repository definitions, credentials, and runtime limits |
 | [Restic compatibility](docs/restic-compatibility.md) | Command formats, backend restrictions, locks, and process lifecycle |
+| [Scan and response budgets](docs/scan-budgets.md) | Incremental scan limits, incomplete-page semantics, migration, and baseline |
 | [Security policy](SECURITY.md) | Threat model, metadata privacy, and private vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) · [Testing](docs/testing.md) | Development rules, required checks, fixtures, and local artifacts |
 | [Releasing](docs/releasing.md) · [Releases](https://github.com/ThomasCrouzet/restic-defensive-mcp/releases) · [Changelog](CHANGELOG.md) | Publication procedure, downloads, and recorded changes |

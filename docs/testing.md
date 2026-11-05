@@ -103,6 +103,12 @@ overlapping allowlists, `/`, disjoint roots, hidden hosts and tags, scoped
 `latest`, and whole-snapshot statistics restrictions.
 They also cover startup, version output, all seven tools, and nonempty metadata results.
 They also cover path denial, pagination, empty results, credential restrictions, and the separation of stdout and stderr.
+Incremental scan budgets are exercised by a disposable fixture with 200 hidden
+and 200 visible files: hidden entries are filtered before paging, continuation
+covers every visible match, and exhausted scan/response budgets are reported as
+incomplete or as errors rather than complete successes.
+See [Scan and response budgets](scan-budgets.md) for the limit model, migration
+guidance, and a reproducible local baseline.
 Configuration diagnostics are exercised through the executable for valid,
 invalid, permission-failing, unreachable, and machine-readable results, including
 the guarantee that local validation does not contact a configured backend.
