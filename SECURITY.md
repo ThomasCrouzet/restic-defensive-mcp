@@ -79,6 +79,11 @@ treated as potentially compromised, confused, or hostile.
 - **Read-only means no intentional repository content mutation.** Restic may
   still create or update a **local cache** and may take **repository locks**
   during inspection commands. This is documented per operation class.
+- Optional metadata caching can serve an observation made before a password or
+  repository-removal change until its short TTL expires. The response marks the
+  hit and age; it is not proof of current authentication or reachability. Cached
+  entries stay in memory, never contain credentials or repository locations, and
+  are bounded by TTL and entry count. Content commands are always executed fresh.
 - Graceful cancellation normally lets restic remove its inspection lock. If a
   process ignores `SIGTERM`, forced group termination can still leave a stale
   lock behind. A later exclusive maintenance operation may then require the

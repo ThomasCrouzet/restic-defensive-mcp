@@ -37,6 +37,8 @@ type capabilitiesLimits struct {
 	MaxOutputBytes             int `json:"max_output_bytes"`
 	MaxConcurrentPerRepo       int `json:"max_concurrent_per_repo"`
 	MaxConcurrentGlobal        int `json:"max_concurrent_global"`
+	MetadataCacheTTLSec        int `json:"metadata_cache_ttl_sec"`
+	MetadataCacheMaxEntries    int `json:"metadata_cache_max_entries"`
 }
 
 type capabilitiesData struct {
@@ -54,14 +56,23 @@ type capabilitiesData struct {
 }
 
 type listSnapshotsData struct {
-	Snapshots  []restic.Snapshot `json:"snapshots"`
-	Count      int               `json:"count"`
-	Total      int               `json:"total"`
-	Offset     int               `json:"offset"`
-	Limit      int               `json:"limit"`
-	Window     windowData        `json:"window"`
-	NextCursor string            `json:"next_cursor,omitempty"`
-	Freshness  *freshnessData    `json:"freshness,omitempty"`
+	Snapshots     []restic.Snapshot  `json:"snapshots"`
+	Count         int                `json:"count"`
+	Total         int                `json:"total"`
+	Offset        int                `json:"offset"`
+	Limit         int                `json:"limit"`
+	Window        windowData         `json:"window"`
+	NextCursor    string             `json:"next_cursor,omitempty"`
+	Freshness     *freshnessData     `json:"freshness,omitempty"`
+	MetadataCache *metadataCacheData `json:"metadata_cache,omitempty"`
+}
+
+type metadataCacheData struct {
+	Enabled    bool   `json:"enabled"`
+	Hit        bool   `json:"hit"`
+	ObservedAt string `json:"observed_at"`
+	AgeSeconds int64  `json:"age_seconds"`
+	TTLSeconds int64  `json:"ttl_seconds"`
 }
 
 type freshnessData struct {

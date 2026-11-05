@@ -30,23 +30,27 @@ const (
 	defaultMaxOutputBytes          = 8 << 20 // 8 MiB
 	defaultMaxConcurrentPerRepo    = 1
 	defaultMaxConcurrentGlobal     = 4
+	defaultMetadataCacheMaxEntries = 128
 
-	minCommandTimeout   = 1 * time.Second
-	maxCommandTimeout   = 2 * time.Minute
-	minExpensiveTimeout = 10 * time.Second
-	maxExpensiveTimeout = 15 * time.Minute
-	minMaxSnapshots     = 1
-	maxMaxSnapshots     = 1000
-	minMaxNodes         = 1
-	maxMaxNodes         = 5000
-	minMaxFindResults   = 1
-	maxMaxFindResults   = 2000
-	minMaxOutputBytes   = 64 << 10 // 64 KiB
-	maxMaxOutputBytes   = 32 << 20 // 32 MiB
-	maxSecretFileBytes  = 4 << 10  // 4 KiB
-	maxRepositories     = 32
-	maxAllowlistEntries = 256
-	maxEnvFiles         = 16
+	minCommandTimeout       = 1 * time.Second
+	maxCommandTimeout       = 2 * time.Minute
+	minExpensiveTimeout     = 10 * time.Second
+	maxExpensiveTimeout     = 15 * time.Minute
+	minMaxSnapshots         = 1
+	maxMaxSnapshots         = 1000
+	minMaxNodes             = 1
+	maxMaxNodes             = 5000
+	minMaxFindResults       = 1
+	maxMaxFindResults       = 2000
+	minMaxOutputBytes       = 64 << 10 // 64 KiB
+	maxMaxOutputBytes       = 32 << 20 // 32 MiB
+	minMetadataCacheTTL     = 1 * time.Second
+	maxMetadataCacheTTL     = 5 * time.Minute
+	maxMetadataCacheEntries = 1024
+	maxSecretFileBytes      = 4 << 10 // 4 KiB
+	maxRepositories         = 32
+	maxAllowlistEntries     = 256
+	maxEnvFiles             = 16
 )
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
@@ -71,6 +75,11 @@ type Limits struct {
 	MaxOutputBytes          int           `yaml:"max_output_bytes"`
 	MaxConcurrentPerRepo    int           `yaml:"max_concurrent_per_repo"`
 	MaxConcurrentGlobal     int           `yaml:"max_concurrent_global"`
+	// MetadataCacheTTL enables a short-lived in-memory cache for identical
+	// successful snapshot-metadata queries. Zero disables caching.
+	MetadataCacheTTL time.Duration `yaml:"metadata_cache_ttl"`
+	// MetadataCacheMaxEntries bounds the optional metadata cache.
+	MetadataCacheMaxEntries int `yaml:"metadata_cache_max_entries"`
 }
 
 // Repository is one pre-declared restic repository. Callers may only reference ID.
@@ -190,6 +199,9 @@ func (c *Config) applyLimitDefaults() {
 	if c.Limits.MaxConcurrentGlobal == 0 {
 		c.Limits.MaxConcurrentGlobal = defaultMaxConcurrentGlobal
 	}
+	if c.Limits.MetadataCacheTTL > 0 && c.Limits.MetadataCacheMaxEntries == 0 {
+		c.Limits.MetadataCacheMaxEntries = defaultMetadataCacheMaxEntries
+	}
 }
 
 func (c *Config) validateLimits() error {
@@ -220,6 +232,15 @@ func (c *Config) validateLimits() error {
 	}
 	if l.MaxConcurrentGlobal < 1 || l.MaxConcurrentGlobal > 16 {
 		return apperr.New(apperr.ConfigError, "limits.max_concurrent_global out of range")
+	}
+	if l.MetadataCacheTTL != 0 && (l.MetadataCacheTTL < minMetadataCacheTTL || l.MetadataCacheTTL > maxMetadataCacheTTL) {
+		return apperr.New(apperr.ConfigError, "limits.metadata_cache_ttl out of range")
+	}
+	if l.MetadataCacheTTL == 0 && l.MetadataCacheMaxEntries != 0 {
+		return apperr.New(apperr.ConfigError, "limits.metadata_cache_max_entries requires metadata_cache_ttl")
+	}
+	if l.MetadataCacheMaxEntries < 0 || l.MetadataCacheMaxEntries > maxMetadataCacheEntries {
+		return apperr.New(apperr.ConfigError, "limits.metadata_cache_max_entries out of range")
 	}
 	return nil
 }

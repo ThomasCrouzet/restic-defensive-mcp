@@ -29,6 +29,10 @@ limits:
   max_output_bytes: 8388608
   max_concurrent_per_repo: 1
   max_concurrent_global: 4
+  # Optional short-lived in-memory cache for identical successful snapshot
+  # metadata queries. 0 disables. Allowed: 1s..5m; max entries 1..1024.
+  metadata_cache_ttl: 0s
+  metadata_cache_max_entries: 0
 
 repositories:
   - id: local-example

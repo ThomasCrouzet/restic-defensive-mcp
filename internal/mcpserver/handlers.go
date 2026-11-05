@@ -36,6 +36,8 @@ func makeCapabilities(deps Deps) func(context.Context, *mcp.CallToolRequest, emp
 				"max_output_bytes":              lim.MaxOutputBytes,
 				"max_concurrent_per_repo":       lim.MaxConcurrentPerRepo,
 				"max_concurrent_global":         lim.MaxConcurrentGlobal,
+				"metadata_cache_ttl_sec":        int(lim.MetadataCacheTTL.Seconds()),
+				"metadata_cache_max_entries":    lim.MetadataCacheMaxEntries,
 			},
 			"warnings": []string{
 				"This server is structurally read-only: no backup, restore, forget, prune, unlock, or repair tools.",
@@ -104,7 +106,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			if err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
-			filtered, more, err := listSnapshotsForCursor(ctx, deps, e, in.RepositoryID, state, limit)
+			filtered, more, observation, err := listSnapshotsForCursor(ctx, deps, e, in.RepositoryID, state, limit)
 			if err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
@@ -120,6 +122,9 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 				"offset":    start,
 				"limit":     limit,
 				"window":    windowOutput(state.After, state.Before),
+			}
+			if observation.Enabled {
+				out["metadata_cache"] = metadataCacheOutput(observation)
 			}
 			if truncated {
 				next, cursorErr := deps.cursors.issue(cursorState{
@@ -140,7 +145,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 				}
 				out["next_cursor"] = next
 			}
-			return okResult(restic.CostLight, out, truncated)
+			return okResult(restic.CostLight, out, truncated, metadataCacheWarning(observation)...)
 		}
 
 		opts := restic.SnapshotsOpts{}
@@ -183,7 +188,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, err.Error()))
 		}
-		res, err := deps.Registry.Run(ctx, in.RepositoryID, argv, false)
+		res, observation, err := deps.Registry.RunMetadata(ctx, in.RepositoryID, argv)
 		if err != nil {
 			return errTool(err), nil, nil
 		}
@@ -240,6 +245,9 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			freshness := buildFreshness(e, filtered, partialByID, scope, groupBy, cadence, false)
 			out["freshness"] = freshness
 		}
+		if observation.Enabled {
+			out["metadata_cache"] = metadataCacheOutput(observation)
+		}
 		if truncated && len(page) > 0 {
 			next, cursorErr := deps.cursors.issue(cursorState{
 				Tool:       tool,
@@ -259,7 +267,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			}
 			out["next_cursor"] = next
 		}
-		return okResult(restic.CostLight, out, truncated)
+		return okResult(restic.CostLight, out, truncated, metadataCacheWarning(observation)...)
 	}
 }
 
@@ -270,15 +278,15 @@ func listSnapshotsForCursor(
 	repoID string,
 	state cursorState,
 	limit int,
-) ([]restic.Snapshot, bool, error) {
+) ([]restic.Snapshot, bool, repositories.MetadataObservation, error) {
 	window, err := parseTimeWindow(state.After, state.Before)
 	if err != nil {
-		return nil, false, apperr.New(apperr.CursorInvalid, "cursor carries an invalid time window")
+		return nil, false, repositories.MetadataObservation{}, apperr.New(apperr.CursorInvalid, "cursor carries an invalid time window")
 	}
 	opts := restic.SnapshotsOpts{}
 	if state.Host != "" {
 		if err := e.Hosts.Check(state.Host); err != nil {
-			return nil, false, err
+			return nil, false, repositories.MetadataObservation{}, err
 		}
 		opts.Hosts = []string{state.Host}
 	} else if len(e.Hosts.Allowed) == 1 {
@@ -286,21 +294,21 @@ func listSnapshotsForCursor(
 	}
 	if len(state.Tags) > 0 {
 		if err := e.Tags.CheckEach(state.Tags); err != nil {
-			return nil, false, err
+			return nil, false, repositories.MetadataObservation{}, err
 		}
 		opts.Tags = state.Tags
 	}
 	argv, err := restic.BuildSnapshotsArgv(opts)
 	if err != nil {
-		return nil, false, apperr.New(apperr.InvalidArgument, err.Error())
+		return nil, false, repositories.MetadataObservation{}, apperr.New(apperr.InvalidArgument, err.Error())
 	}
-	res, err := deps.Registry.Run(ctx, repoID, argv, false)
+	res, observation, err := deps.Registry.RunMetadata(ctx, repoID, argv)
 	if err != nil {
-		return nil, false, err
+		return nil, false, observation, err
 	}
 	snaps, err := restic.ParseSnapshots(res.Stdout)
 	if err != nil {
-		return nil, false, err
+		return nil, false, observation, err
 	}
 	out := make([]restic.Snapshot, 0, limit+1)
 	more := false
@@ -319,7 +327,24 @@ func listSnapshotsForCursor(
 		}
 		out = append(out, publicSnapshot(e, snapshot))
 	}
-	return out, more, nil
+	return out, more, observation, nil
+}
+
+func metadataCacheWarning(observation repositories.MetadataObservation) []string {
+	if !observation.Hit {
+		return nil
+	}
+	return []string{"metadata_cache hit: this observation does not prove current authentication or backend reachability"}
+}
+
+func metadataCacheOutput(observation repositories.MetadataObservation) metadataCacheData {
+	return metadataCacheData{
+		Enabled:    observation.Enabled,
+		Hit:        observation.Hit,
+		ObservedAt: observation.ObservedAt.UTC().Format(time.RFC3339Nano),
+		AgeSeconds: observation.AgeSeconds,
+		TTLSeconds: observation.TTLSeconds,
+	}
 }
 
 func afterSnapshotMarker(snapshot restic.Snapshot, lastTime time.Time, lastID string) bool {

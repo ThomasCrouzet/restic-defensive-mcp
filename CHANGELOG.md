@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Coalesce identical in-flight snapshot-metadata queries and add an optional
+  bounded in-memory cache with observation time, age, TTL, and cache-hit
+  disclosure.
+
 - Add an opt-in metadata-only freshness summary to `list_snapshots`, with
   explicit observation time, visible scope, hidden-scope flags, cadence
   judgment, and partial-visibility reporting.

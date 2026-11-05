@@ -34,6 +34,20 @@ plus `SHA256SUMS`. The dedicated workflow runs it for packaging changes and the
 release workflow gates publication on it. See [Releasing](releasing.md) for the
 controlled toolchain envelope and local command.
 
+## Metadata coalescing and cache
+
+`TestRunMetadataCoalescesIdenticalInFlightQueries` measures backend command
+count directly with a fake runner: six concurrent identical metadata queries
+produce one command. Cache tests compare miss, hit, selector isolation, expiry,
+and cache-off command counts. `TestExecutableMetadataCache` observes hit status,
+age, TTL, selector isolation, and password-rotation expiry through the real
+executable. These checks bound command count and behavior; they are not a
+general latency or memory benchmark. Run the focused workload with:
+
+```bash
+go test ./internal/repositories -run TestRunMetadata -count=1 -v
+```
+
 ## Fuzzing
 
 Normal tests always run each fuzz target's deterministic seed corpus. Pull-request

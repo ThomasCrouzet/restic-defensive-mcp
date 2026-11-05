@@ -293,6 +293,12 @@ keys and multiple YAML documents are rejected. See
   8 MiB per restic stdout/stderr stream, and concurrency of 1 per repository / 4
   globally. Nonzero values outside absolute min/max bounds are rejected rather
   than clamped.
+- **Metadata cache:** identical in-flight snapshot-metadata queries are
+  coalesced. Set `limits.metadata_cache_ttl` (`1s` to `5m`) to enable a
+  short-lived, bounded in-memory cache; `limits.metadata_cache_max_entries`
+  defaults to 128 and is capped at 1024. Zero TTL keeps the cache off. Cached
+  responses expose `metadata_cache.hit`, observation time, age, and TTL; a hit
+  never proves current authentication or backend reachability.
 
 ### Supported backends
 
