@@ -282,7 +282,7 @@ func validateRepository(r *Repository, index int) error {
 		r.CacheDir = filepath.Clean(r.CacheDir)
 	}
 	for i, p := range r.AllowedPaths {
-		cleaned, err := policy.CleanPath(p)
+		cleaned, err := policy.CleanSnapshotPath(p)
 		if err != nil {
 			return apperr.New(apperr.ConfigError, fmt.Sprintf("%s.allowed_paths[%d]: invalid path", loc, i)).WithCause(err)
 		}

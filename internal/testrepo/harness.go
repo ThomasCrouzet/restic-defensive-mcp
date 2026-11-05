@@ -161,6 +161,74 @@ func Create(ctx context.Context, resticBinary string) (*Fixture, error) {
 	return f, nil
 }
 
+// CreateStdinFixture builds a temporary repository populated only through
+// restic --stdin snapshots. It lets native Windows tests use POSIX snapshot
+// paths without depending on Windows-origin drive or UNC path support.
+func CreateStdinFixture(ctx context.Context, resticBinary string) (*Fixture, error) {
+	if resticBinary == "" {
+		var err error
+		resticBinary, err = exec.LookPath("restic")
+		if err != nil {
+			return nil, fmt.Errorf("restic not found: %w", err)
+		}
+	}
+	root, err := os.MkdirTemp("", "restic-defensive-mcp-stdin-*")
+	if err != nil {
+		return nil, err
+	}
+	f := &Fixture{Root: root, binary: resticBinary}
+	f.RepoDir = filepath.Join(root, "repo")
+	f.CacheDir = filepath.Join(root, "cache")
+	f.PasswordFile = filepath.Join(root, "password")
+	f.RepositoryFile = filepath.Join(root, "repository")
+	for _, d := range []string{f.RepoDir, f.CacheDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			_ = os.RemoveAll(root)
+			return nil, err
+		}
+	}
+	f.password = "test-password-not-secret"
+	if err := f.SetPassword(f.password); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := os.WriteFile(f.RepositoryFile, []byte(f.RepoDir+"\n"), 0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.run(ctx, "init"); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("init: %w", err)
+	}
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "testhost"
+	}
+	f.Host = hostname
+	return f, nil
+}
+
+// AddStdinSnapshot stores one file as a POSIX path inside the snapshot.
+func (f *Fixture) AddStdinSnapshot(ctx context.Context, host string, tags []string, filename string, contents []byte) error {
+	args := []string{"backup", "--stdin", "--stdin-filename", filename}
+	if host != "" {
+		args = append(args, "--host", host)
+	}
+	for _, tag := range tags {
+		args = append(args, "--tag", tag)
+	}
+	cmd := exec.CommandContext(ctx, f.binary, args...)
+	cmd.Env = f.env()
+	cmd.Stdin = bytes.NewReader(contents)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Stdout = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("stdin backup: %v: %s", err, stderr.String())
+	}
+	return nil
+}
+
 // WriteConfig writes a complete server configuration for this fixture.
 func (f *Fixture) WriteConfig(path, resticBinary string) error {
 	return f.WriteConfigForPaths(path, resticBinary, []string{f.DataDir1, f.DataDir2})

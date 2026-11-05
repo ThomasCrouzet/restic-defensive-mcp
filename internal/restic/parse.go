@@ -182,7 +182,7 @@ func normalizeSnapshot(r rawSnapshot) (Snapshot, error) {
 	}
 	paths := make([]string, 0, len(r.Paths))
 	for _, p := range r.Paths {
-		cleaned, err := policy.CleanPath(p)
+		cleaned, err := policy.CleanSnapshotPath(p)
 		if err != nil {
 			return Snapshot{}, apperr.New(apperr.ProtocolError, "snapshot has invalid path").WithCause(err)
 		}

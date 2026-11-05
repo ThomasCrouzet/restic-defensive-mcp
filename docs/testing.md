@@ -26,6 +26,16 @@ lock cleanup. During a release it builds the intended macOS archive and tests th
 extracted binary. It does not duplicate the Linux restic-version matrix. Evidence
 stays in the runner temp directory and is not uploaded.
 
+## Native Windows
+
+`.github/workflows/native-windows.yml` runs on `windows-latest` for changes to
+startup, process handling, configuration, packaging, or the executable suite.
+It installs a checksum-verified restic 0.19.1, builds the executable at a path
+containing spaces, records OS/architecture/Go/restic versions, and runs the
+POSIX-path stdin fixture plus an `icacls` private-ACL check. Canonicalization of
+Windows drive-root snapshot paths is covered by isolated policy tests; UNC and
+drive-relative forms remain rejected. It does not upload evidence.
+
 ## Reproducible packaging
 
 `scripts/verify_reproducible_builds.py` builds one revision twice in detached

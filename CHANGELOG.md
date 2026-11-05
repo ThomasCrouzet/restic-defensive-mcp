@@ -28,6 +28,9 @@ All notable changes to this project are documented in this file.
 
 - Add native macOS arm64 runtime validation for the executable stdio and
   cancellation suites, including release-archive validation.
+- Add native Windows runtime and fixture validation, reject drive and UNC
+  snapshot paths explicitly, and document operator-enforced NTFS ACLs and
+  direct-process cancellation limits.
 
 - Verify release archives by building the same revision twice with separate
   worktrees and build caches, then comparing every archive and `SHA256SUMS`
