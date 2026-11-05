@@ -66,6 +66,20 @@ equal, or malformed bounds return `invalid_argument` before any restic command.
 A window narrows an oversized `find_files` or `repository_stats` selection; it
 never changes statistics modes or aggregates independent batches.
 
+## Schema and validation
+
+Every tool advertises an `outputSchema` in `tools/list` and returns the same
+envelope as MCP `structuredContent` plus a JSON text block for older clients.
+The envelope requires `cost` and `data`; `truncated`, `warnings`, continuation
+fields, and optional result fields are omitted when absent.
+
+The SDK validates JSON argument types, unknown required fields, and bounds
+declared by the input schema before the handler runs. Those framework failures
+are MCP tool errors and do not use the `{code, message, detail}` handler
+envelope. Policy, window, cursor, repository, and restic failures keep the
+documented handler envelope and error codes. Optional result fields such as
+`total` and `next_cursor` are explicitly absent rather than guessed.
+
 ## Tools
 
 ### `restic_capabilities`

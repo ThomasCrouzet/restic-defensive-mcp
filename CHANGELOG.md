@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Publish typed output schemas for all seven tools, return matching structured
+  content alongside the text compatibility envelope, and split the MCP server
+  into registration, contract, selection, and handler components.
+
 - Add `--validate-config` for local configuration diagnostics and `--diagnose`
   for explicitly requested bounded repository connectivity checks. Both support
   human-readable and `--json` output without exposing secrets or backend URLs.
