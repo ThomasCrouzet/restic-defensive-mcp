@@ -4,7 +4,7 @@ GO_BUILD_FLAGS ?= -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION)
 FUZZTIME ?= 5s
 
-.PHONY: all build test race vet fmt lint fuzz-smoke integration demo clean help
+.PHONY: all build test race vet fmt lint fuzz-smoke integration integration-remote demo clean help
 
 all: build test
 
@@ -38,6 +38,10 @@ fuzz-smoke:
 integration:
 	go test -tags=integration -count=1 -timeout 5m -v .
 
+integration-remote:
+	RESTIC_MCP_REMOTE_TESTS=1 go test -tags=integration -count=1 -timeout 12m -v \
+		-run '^(TestExecutableRemoteRESTBackend|TestExecutableRemoteS3Backend|TestExecutableB2ConfigurationBoundary)$$' .
+
 demo:
 	go test -tags=integration -count=1 -timeout 5m -run '^TestExecutableStdioEndToEnd$$' -v .
 
@@ -47,4 +51,4 @@ clean:
 	go clean -testcache
 
 help:
-	@echo "targets: build test race vet fmt lint fuzz-smoke integration demo clean"
+	@echo "targets: build test race vet fmt lint fuzz-smoke integration integration-remote demo clean"

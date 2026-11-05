@@ -29,6 +29,8 @@ type Fixture struct {
 	Host           string
 	password       string
 	binary         string
+	remoteLocation string
+	remoteEnv      []string
 }
 
 // Description records the stable fixture recipe without secret values.
@@ -59,6 +61,12 @@ type ConfigPolicy struct {
 	MaxResponseBytes     int
 	MetadataCacheTTL     time.Duration
 	MetadataCacheMaxSize int
+	// CacheDir overrides the fixture cache directory. Remote failure scenarios
+	// use a fresh cache so restic cannot satisfy a request from cached metadata.
+	CacheDir string
+	// CommandTimeout and ExpensiveCommandTimeout override the fixture defaults.
+	CommandTimeout          time.Duration
+	ExpensiveCommandTimeout time.Duration
 }
 
 // S3Credentials defines synthetic static credentials for startup checks.
@@ -67,8 +75,23 @@ type S3Credentials struct {
 	SecretAccessKey *string
 }
 
-// Create builds a temp dir, two data trees, inits a repo, and creates two snapshots.
+// Create builds a temp dir, two data trees, inits a local repo, and creates two snapshots.
 func Create(ctx context.Context, resticBinary string) (*Fixture, error) {
+	return create(ctx, resticBinary, "", nil)
+}
+
+// CreateRemote builds the same fixture against a disposable remote backend.
+// location is the restic repository URL (for example rest: or s3:) and env
+// carries synthetic backend credentials. Repository creation and backup still
+// happen only inside this test-only package.
+func CreateRemote(ctx context.Context, resticBinary, location string, env []string) (*Fixture, error) {
+	if strings.TrimSpace(location) == "" {
+		return nil, fmt.Errorf("remote fixture requires a repository location")
+	}
+	return create(ctx, resticBinary, location, env)
+}
+
+func create(ctx context.Context, resticBinary, location string, extraEnv []string) (*Fixture, error) {
 	if resticBinary == "" {
 		var err error
 		resticBinary, err = exec.LookPath("restic")
@@ -87,6 +110,10 @@ func Create(ctx context.Context, resticBinary string) (*Fixture, error) {
 	f.DataDir2 = filepath.Join(root, "data2")
 	f.PasswordFile = filepath.Join(root, "password")
 	f.RepositoryFile = filepath.Join(root, "repository")
+	if location != "" {
+		f.remoteLocation = location
+		f.remoteEnv = append([]string(nil), extraEnv...)
+	}
 
 	for _, d := range []string{f.RepoDir, f.CacheDir, f.DataDir1, f.DataDir2} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -99,7 +126,11 @@ func Create(ctx context.Context, resticBinary string) (*Fixture, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	if err := os.WriteFile(f.RepositoryFile, []byte(f.RepoDir+"\n"), 0o600); err != nil {
+	locationForFile := location
+	if locationForFile == "" {
+		locationForFile = f.RepoDir
+	}
+	if err := os.WriteFile(f.RepositoryFile, []byte(locationForFile+"\n"), 0o600); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -252,7 +283,71 @@ func (f *Fixture) WriteConfigForPaths(path, resticBinary string, allowedPaths []
 // WriteConfigWithPolicy writes a fixture configuration with explicit visibility
 // policy and optional limit overrides.
 func (f *Fixture) WriteConfigWithPolicy(path, resticBinary string, policy ConfigPolicy) error {
-	return f.writeConfig(path, resticBinary, f.RepositoryFile, "", policy)
+	envPath := ""
+	if f.remoteLocation != "" {
+		var err error
+		envPath, err = f.writeRemoteEnvFile()
+		if err != nil {
+			return err
+		}
+	}
+	return f.writeConfig(path, resticBinary, f.RepositoryFile, envPath, policy)
+}
+
+// WriteRemoteConfig writes a configuration for the fixture's remote backend,
+// including synthetic backend credentials in a private env file.
+func (f *Fixture) WriteRemoteConfig(path, resticBinary string, policy ConfigPolicy) error {
+	return f.WriteConfigWithPolicy(path, resticBinary, policy)
+}
+
+// WriteConfigForRepository writes a configuration pointing at an arbitrary
+// location while keeping this fixture's password and data policy. Failure
+// scenarios use it to target a missing repository, a TLS endpoint, or a proxy
+// without preparing a second repository.
+func (f *Fixture) WriteConfigForRepository(
+	path, resticBinary, location string,
+	credentials []string,
+	policy ConfigPolicy,
+) error {
+	repoFile, err := writeSecretTemp(f.Root, "repository-", location+"\n")
+	if err != nil {
+		return err
+	}
+	envPath := ""
+	if len(credentials) > 0 {
+		envPath, err = writeSecretTemp(f.Root, "env-", strings.Join(credentials, "\n")+"\n")
+		if err != nil {
+			return err
+		}
+	}
+	return f.writeConfig(path, resticBinary, repoFile, envPath, policy)
+}
+
+func (f *Fixture) writeRemoteEnvFile() (string, error) {
+	if len(f.remoteEnv) == 0 {
+		return "", nil
+	}
+	return writeSecretTemp(f.Root, "env-", strings.Join(f.remoteEnv, "\n")+"\n")
+}
+
+func writeSecretTemp(dir, pattern, contents string) (string, error) {
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if _, err := file.WriteString(contents); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // WriteConfigWithBlockedEnvKey writes a config that must fail during startup.
@@ -327,6 +422,16 @@ func (f *Fixture) writeConfig(path, resticBinary, repositoryPath, envPath string
 	if policy.MaxResponseBytes == 0 {
 		policy.MaxResponseBytes = 2097152
 	}
+	if policy.CommandTimeout == 0 {
+		policy.CommandTimeout = 60 * time.Second
+	}
+	if policy.ExpensiveCommandTimeout == 0 {
+		policy.ExpensiveCommandTimeout = 2 * time.Minute
+	}
+	cacheDir := policy.CacheDir
+	if cacheDir == "" {
+		cacheDir = f.CacheDir
+	}
 	envFiles := ""
 	if envPath != "" {
 		envFiles = fmt.Sprintf("    env_files: [%q]\n", envPath)
@@ -334,8 +439,8 @@ func (f *Fixture) writeConfig(path, resticBinary, repositoryPath, envPath string
 	content := fmt.Sprintf(`version: 1
 restic_binary: %q
 limits:
-  command_timeout: 60s
-  expensive_command_timeout: 2m
+  command_timeout: %s
+  expensive_command_timeout: %s
   max_snapshots: %d
   max_nodes: %d
   max_find_results: %d
@@ -356,10 +461,11 @@ repositories:
     allowed_hosts: [%s]
     allowed_tags: [%s]
     allowed_paths: [%s]
-%s`, resticBinary, policy.MaxSnapshots, policy.MaxNodes, policy.MaxFindResults,
+%s`, resticBinary, policy.CommandTimeout.String(), policy.ExpensiveCommandTimeout.String(),
+		policy.MaxSnapshots, policy.MaxNodes, policy.MaxFindResults,
 		policy.MaxOutputBytes, policy.MaxScanBytes, policy.MaxDecodedEntries, policy.MaxResponseBytes,
 		policy.MetadataCacheTTL.String(), policy.MetadataCacheMaxSize,
-		repositoryPath, f.PasswordFile, f.CacheDir,
+		repositoryPath, f.PasswordFile, cacheDir,
 		quotedYAMLList(policy.AllowedHosts), quotedYAMLList(policy.AllowedTags), quotedYAMLList(policy.AllowedPaths),
 		envFiles)
 	return os.WriteFile(path, []byte(content), 0o600)
@@ -494,15 +600,46 @@ func (f *Fixture) run(ctx context.Context, args ...string) error {
 	return nil
 }
 
+// Location returns the repository location used to prepare this fixture.
+func (f *Fixture) Location() string {
+	if f == nil {
+		return ""
+	}
+	if f.remoteLocation != "" {
+		return f.remoteLocation
+	}
+	return f.RepoDir
+}
+
 func (f *Fixture) env() []string {
-	return []string{
+	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + f.Root,
-		"RESTIC_REPOSITORY_FILE=" + f.RepositoryFile,
 		"RESTIC_PASSWORD_FILE=" + f.PasswordFile,
 		"RESTIC_CACHE_DIR=" + f.CacheDir,
 		"LANG=C",
 	}
+	if f.remoteLocation != "" {
+		env = append(env, "RESTIC_REPOSITORY="+f.remoteLocation)
+		env = append(env, f.remoteEnv...)
+		return env
+	}
+	return append(env, "RESTIC_REPOSITORY_FILE="+f.RepositoryFile)
+}
+
+func (f *Fixture) envFor(location string, extraEnv []string) []string {
+	if location == "" {
+		return f.env()
+	}
+	env := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + f.Root,
+		"RESTIC_PASSWORD_FILE=" + f.PasswordFile,
+		"RESTIC_CACHE_DIR=" + f.CacheDir,
+		"LANG=C",
+		"RESTIC_REPOSITORY=" + location,
+	}
+	return append(env, extraEnv...)
 }
 
 // Close removes the temporary directory.
