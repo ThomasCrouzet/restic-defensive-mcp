@@ -4,7 +4,9 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -25,6 +27,7 @@ type Deps struct {
 	ResticVersion string
 	Audit         *audit.Logger
 	ServerVersion string
+	cursors       *cursorStore
 }
 
 // toolNames is the closed list of MCP tools (max 7).
@@ -48,6 +51,7 @@ func NewServer(deps Deps) *mcp.Server {
 	if deps.ServerVersion == "" {
 		deps.ServerVersion = Version
 	}
+	deps.cursors = newCursorStore()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "restic-defensive-mcp",
 		Version: deps.ServerVersion,
@@ -69,7 +73,7 @@ func NewServer(deps Deps) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_snapshots",
-		Description: "List snapshots for a repository_id with optional host/tag/path filters (must be allowlisted). Bounded and paginated. Cost: light.",
+		Description: "List snapshots for a repository_id with optional host/tag/path filters (must be allowlisted). Bounded; supports offset or an opaque continuation cursor. Cost: light.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, DestructiveHint: boolPtr(false)},
 	}, makeListSnapshots(deps))
 
@@ -81,13 +85,13 @@ func NewServer(deps Deps) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "browse_snapshot",
-		Description: "List directory entries inside a snapshot at an allowlisted path. Non-recursive by default, hard node limit. No file contents. Cost: moderate.",
+		Description: "List directory entries inside a snapshot at an allowlisted path. Non-recursive by default, hard node limit, opaque continuation cursor. No file contents. Cost: moderate.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, DestructiveHint: boolPtr(false)},
 	}, makeBrowseSnapshot(deps))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "find_files",
-		Description: "Find files by a simple glob pattern within allowlisted scope. Not full regex. Bounded results. Cost: moderate to expensive.",
+		Description: "Find files by a simple glob pattern within allowlisted scope. Not full regex. Bounded results with an opaque continuation cursor. Cost: moderate to expensive.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, DestructiveHint: boolPtr(false)},
 	}, makeFindFiles(deps))
 
@@ -207,6 +211,7 @@ type listSnapshotsIn struct {
 	Path         string   `json:"path,omitempty" jsonschema:"optional path filter (must be allowlisted)"`
 	Limit        int      `json:"limit,omitempty" jsonschema:"max snapshots to return"`
 	Offset       int      `json:"offset,omitempty" jsonschema:"pagination offset"`
+	Cursor       string   `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
 }
 
 type getSnapshotIn struct {
@@ -219,22 +224,24 @@ type getSnapshotIn struct {
 
 type browseSnapshotIn struct {
 	RepositoryID string `json:"repository_id" jsonschema:"preconfigured repository id"`
-	SnapshotID   string `json:"snapshot_id" jsonschema:"full id, unambiguous prefix, or latest"`
-	Path         string `json:"path" jsonschema:"absolute path inside snapshot (must be allowlisted)"`
+	SnapshotID   string `json:"snapshot_id,omitempty" jsonschema:"full id, unambiguous prefix, or latest; omitted when cursor is supplied"`
+	Path         string `json:"path,omitempty" jsonschema:"absolute path inside snapshot (must be allowlisted); omitted when cursor is supplied"`
 	Recursive    bool   `json:"recursive,omitempty" jsonschema:"default false"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"max nodes"`
 	Host         string `json:"host,omitempty" jsonschema:"optional host filter"`
+	Cursor       string `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
 }
 
 type findFilesIn struct {
 	RepositoryID string   `json:"repository_id" jsonschema:"preconfigured repository id"`
-	Pattern      string   `json:"pattern" jsonschema:"simple glob pattern (not regex)"`
+	Pattern      string   `json:"pattern,omitempty" jsonschema:"simple glob pattern (not regex); omitted when cursor is supplied"`
 	Path         string   `json:"path,omitempty" jsonschema:"optional path scope (must be allowlisted)"`
 	SnapshotID   string   `json:"snapshot_id,omitempty" jsonschema:"optional concrete snapshot id"`
 	Host         string   `json:"host,omitempty" jsonschema:"optional host filter"`
 	Tags         []string `json:"tags,omitempty" jsonschema:"optional tags"`
 	Limit        int      `json:"limit,omitempty" jsonschema:"max matches"`
 	IgnoreCase   bool     `json:"ignore_case,omitempty"`
+	Cursor       string   `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
 }
 
 type repositoryStatsIn struct {
@@ -306,22 +313,73 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "offset must be >= 0"))
 		}
 
+		if in.Cursor != "" {
+			if in.Offset != 0 || in.Host != "" || len(in.Tags) > 0 || in.Path != "" {
+				return failTool(deps, tool, in.RepositoryID, apperr.New(
+					apperr.InvalidArgument,
+					"cursor carries the original filters; pass only repository_id, cursor, and optionally limit",
+				))
+			}
+			state, err := deps.cursors.take(in.Cursor, tool, in.RepositoryID)
+			if err != nil {
+				return failTool(deps, tool, in.RepositoryID, err)
+			}
+			filtered, more, err := listSnapshotsForCursor(ctx, deps, e, in.RepositoryID, state, limit)
+			if err != nil {
+				return failTool(deps, tool, in.RepositoryID, err)
+			}
+			total := state.Total
+			page := filtered
+			start := state.Offset
+			end := start + len(page)
+			truncated := more
+			out := map[string]any{
+				"snapshots": page,
+				"count":     len(page),
+				"total":     total,
+				"offset":    start,
+				"limit":     limit,
+			}
+			if truncated {
+				next, cursorErr := deps.cursors.issue(cursorState{
+					Tool:       tool,
+					Repository: in.RepositoryID,
+					Host:       state.Host,
+					Tags:       state.Tags,
+					Path:       state.Path,
+					LastTime:   page[len(page)-1].Time,
+					LastID:     page[len(page)-1].ID,
+					Offset:     end,
+					Total:      total,
+				})
+				if cursorErr != nil {
+					return errTool(cursorErr), nil, nil
+				}
+				out["next_cursor"] = next
+			}
+			return okResult(restic.CostLight, out, truncated)
+		}
+
 		opts := restic.SnapshotsOpts{}
 		requestedPath := ""
+		state := cursorState{Tool: tool, Repository: in.RepositoryID}
 		if in.Host != "" {
 			if err := e.Hosts.Check(in.Host); err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
 			opts.Hosts = []string{in.Host}
+			state.Host = in.Host
 		} else if len(e.Hosts.Allowed) == 1 {
 			// When exactly one host is allowlisted, apply it to avoid leaking others.
 			opts.Hosts = []string{e.Hosts.Allowed[0]}
+			state.Host = e.Hosts.Allowed[0]
 		}
 		if len(in.Tags) > 0 {
 			if err := e.Tags.CheckEach(in.Tags); err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
 			opts.Tags = in.Tags
+			state.Tags = append([]string(nil), in.Tags...)
 		}
 		if in.Path != "" {
 			p, err := e.Paths.Check(in.Path)
@@ -329,6 +387,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
 			requestedPath = p
+			state.Path = p
 		}
 
 		argv, err := restic.BuildSnapshotsArgv(opts)
@@ -370,8 +429,88 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			"offset":    start,
 			"limit":     limit,
 		}
+		if truncated && len(page) > 0 {
+			next, cursorErr := deps.cursors.issue(cursorState{
+				Tool:       tool,
+				Repository: in.RepositoryID,
+				Host:       state.Host,
+				Tags:       state.Tags,
+				Path:       state.Path,
+				LastTime:   page[len(page)-1].Time,
+				LastID:     page[len(page)-1].ID,
+				Offset:     end,
+				Total:      total,
+			})
+			if cursorErr != nil {
+				return errTool(cursorErr), nil, nil
+			}
+			out["next_cursor"] = next
+		}
 		return okResult(restic.CostLight, out, truncated)
 	}
+}
+
+func listSnapshotsForCursor(
+	ctx context.Context,
+	deps Deps,
+	e *repositories.Entry,
+	repoID string,
+	state cursorState,
+	limit int,
+) ([]restic.Snapshot, bool, error) {
+	opts := restic.SnapshotsOpts{}
+	if state.Host != "" {
+		if err := e.Hosts.Check(state.Host); err != nil {
+			return nil, false, err
+		}
+		opts.Hosts = []string{state.Host}
+	} else if len(e.Hosts.Allowed) == 1 {
+		opts.Hosts = []string{e.Hosts.Allowed[0]}
+	}
+	if len(state.Tags) > 0 {
+		if err := e.Tags.CheckEach(state.Tags); err != nil {
+			return nil, false, err
+		}
+		opts.Tags = state.Tags
+	}
+	argv, err := restic.BuildSnapshotsArgv(opts)
+	if err != nil {
+		return nil, false, apperr.New(apperr.InvalidArgument, err.Error())
+	}
+	res, err := deps.Registry.Run(ctx, repoID, argv, false)
+	if err != nil {
+		return nil, false, err
+	}
+	snaps, err := restic.ParseSnapshots(res.Stdout)
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]restic.Snapshot, 0, limit+1)
+	more := false
+	for _, snapshot := range snaps {
+		if !policyVisible(e, snapshot) || !matchesSnapshotFilters(snapshot, state.Host, state.Tags, state.Path) {
+			continue
+		}
+		if !afterSnapshotMarker(snapshot, state.LastTime, state.LastID) {
+			continue
+		}
+		if len(out) >= limit {
+			more = true
+			break
+		}
+		out = append(out, publicSnapshot(e, snapshot))
+	}
+	return out, more, nil
+}
+
+func afterSnapshotMarker(snapshot restic.Snapshot, lastTime time.Time, lastID string) bool {
+	if lastTime.IsZero() {
+		return true
+	}
+	if snapshot.Time.Before(lastTime) {
+		return true
+	}
+	return snapshot.Time.Equal(lastTime) && snapshot.ID > lastID
 }
 
 func policyVisible(e *repositories.Entry, s restic.Snapshot) bool {
@@ -573,13 +712,6 @@ func makeBrowseSnapshot(deps Deps) func(context.Context, *mcp.CallToolRequest, b
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, err)
 		}
-		if !restic.ValidSnapshotID(in.SnapshotID) {
-			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "invalid snapshot_id"))
-		}
-		path, err := e.Paths.Check(in.Path)
-		if err != nil {
-			return failTool(deps, tool, in.RepositoryID, err)
-		}
 		lim := deps.Registry.Limits()
 		limit := in.Limit
 		if limit < 0 {
@@ -588,63 +720,175 @@ func makeBrowseSnapshot(deps Deps) func(context.Context, *mcp.CallToolRequest, b
 		if limit == 0 || limit > lim.MaxNodes {
 			limit = lim.MaxNodes
 		}
-		if in.SnapshotID == "latest" {
-			if err := validateLatestScope(e, in.Host, nil, path); err != nil {
+
+		var state cursorState
+		if in.Cursor != "" {
+			if in.SnapshotID != "" || in.Path != "" || in.Host != "" || in.Recursive {
+				return failTool(deps, tool, in.RepositoryID, apperr.New(
+					apperr.InvalidArgument,
+					"cursor carries the original scope; pass only repository_id, cursor, and optionally limit",
+				))
+			}
+			state, err = deps.cursors.take(in.Cursor, tool, in.RepositoryID)
+			if err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
+		} else {
+			if !restic.ValidSnapshotID(in.SnapshotID) {
+				return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "invalid snapshot_id"))
+			}
+			path, pathErr := e.Paths.Check(in.Path)
+			if pathErr != nil {
+				return failTool(deps, tool, in.RepositoryID, pathErr)
+			}
+			if in.SnapshotID == "latest" {
+				if err := validateLatestScope(e, in.Host, nil, path); err != nil {
+					return failTool(deps, tool, in.RepositoryID, err)
+				}
+			}
+			snapshot, snapshotErr := resolveVisibleSnapshot(
+				ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, nil, path,
+			)
+			if snapshotErr != nil {
+				return failTool(deps, tool, in.RepositoryID, snapshotErr)
+			}
+			state = cursorState{
+				Tool:        tool,
+				Repository:  in.RepositoryID,
+				Path:        path,
+				Recursive:   in.Recursive,
+				SnapshotIDs: []string{snapshot.ID},
+			}
 		}
-		snapshot, err := resolveVisibleSnapshot(
-			ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, nil, path,
-		)
+
+		// Authorization is rechecked on every page from the concrete snapshot
+		// selection, never from a cursor-provided path or host.
+		snapshots, err := snapshotsByIDs(ctx, deps, e, in.RepositoryID, state.SnapshotIDs)
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, err)
 		}
+		snapshot := snapshots[0]
+		if _, err := e.Paths.Check(state.Path); err != nil {
+			return failTool(deps, tool, in.RepositoryID, err)
+		}
 
-		lsOpts := restic.LSOpts{
-			SnapshotID: snapshot.ID,
-			Dirs:       []string{path},
-			Recursive:  in.Recursive,
-		}
-		argv, err := restic.BuildLSArgv(lsOpts)
-		if err != nil {
-			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, err.Error()))
-		}
-		res, err := deps.Registry.Run(ctx, in.RepositoryID, argv, true)
+		nodes, parseTruncated, err := browseVisibleNodes(
+			ctx, deps, e, in.RepositoryID, snapshot.ID, state.Path, state.Recursive,
+		)
 		if err != nil {
 			return errTool(err), nil, nil
 		}
-		// Parse the complete byte-bounded response, then enforce visibility and
-		// the client limit. Limiting before policy filtering could let hostile
-		// out-of-scope entries hide later authorized entries.
-		nodes, parseTruncated, err := restic.ParseLS(res.Stdout, lim.MaxOutputBytes)
-		if err != nil {
-			return errTool(err), nil, nil
+		total := len(nodes)
+		start := state.Offset
+		if start > total {
+			start = total
 		}
-		filtered := make([]restic.Node, 0, min(len(nodes), limit))
-		truncated := parseTruncated
-		for _, n := range nodes {
-			cleaned, cleanErr := policy.CleanPath(n.Path)
-			if cleanErr != nil || !e.Paths.IsAllowed(cleaned) || !pathIsUnderAllow(cleaned, path) {
-				continue
-			}
-			if len(filtered) >= limit {
-				truncated = true
-				continue
-			}
-			n.Path = redaction.SanitizeAndRedact(cleaned)
-			n.Name = redaction.SanitizeAndRedact(n.Name)
-			n.Type = redaction.SanitizeAndRedact(n.Type)
-			n.Mode = redaction.SanitizeAndRedact(n.Mode)
-			filtered = append(filtered, n)
+		end := start + limit
+		if end > total {
+			end = total
 		}
+		page := nodes[start:end]
+		truncated := end < total || parseTruncated
 		out := map[string]any{
-			"path":      path,
-			"nodes":     filtered,
-			"count":     len(filtered),
-			"recursive": in.Recursive,
+			"path":       state.Path,
+			"nodes":      page,
+			"count":      len(page),
+			"total":      total,
+			"recursive":  state.Recursive,
+			"incomplete": parseTruncated,
+		}
+		if end < total {
+			next, cursorErr := deps.cursors.issue(cursorState{
+				Tool:        tool,
+				Repository:  in.RepositoryID,
+				Path:        state.Path,
+				Recursive:   state.Recursive,
+				SnapshotIDs: state.SnapshotIDs,
+				Offset:      end,
+			})
+			if cursorErr != nil {
+				return errTool(cursorErr), nil, nil
+			}
+			out["next_cursor"] = next
 		}
 		return okResult(restic.CostModerate, out, truncated)
 	}
+}
+
+func browseVisibleNodes(
+	ctx context.Context,
+	deps Deps,
+	e *repositories.Entry,
+	repoID, snapshotID, path string,
+	recursive bool,
+) ([]restic.Node, bool, error) {
+	argv, err := restic.BuildLSArgv(restic.LSOpts{
+		SnapshotID: snapshotID,
+		Dirs:       []string{path},
+		Recursive:  recursive,
+	})
+	if err != nil {
+		return nil, false, apperr.New(apperr.InvalidArgument, err.Error())
+	}
+	res, err := deps.Registry.Run(ctx, repoID, argv, true)
+	if err != nil {
+		return nil, false, err
+	}
+	lim := deps.Registry.Limits()
+	nodes, parseTruncated, err := restic.ParseLS(res.Stdout, lim.MaxOutputBytes)
+	if err != nil {
+		return nil, false, err
+	}
+	filtered := make([]restic.Node, 0, len(nodes))
+	for _, n := range nodes {
+		cleaned, cleanErr := policy.CleanPath(n.Path)
+		if cleanErr != nil || !e.Paths.IsAllowed(cleaned) || !pathIsUnderAllow(cleaned, path) {
+			continue
+		}
+		n.Path = redaction.SanitizeAndRedact(cleaned)
+		n.Name = redaction.SanitizeAndRedact(n.Name)
+		n.Type = redaction.SanitizeAndRedact(n.Type)
+		n.Mode = redaction.SanitizeAndRedact(n.Mode)
+		filtered = append(filtered, n)
+	}
+	return filtered, parseTruncated, nil
+}
+
+func snapshotsByIDs(
+	ctx context.Context,
+	deps Deps,
+	e *repositories.Entry,
+	repoID string,
+	ids []string,
+) ([]restic.Snapshot, error) {
+	if len(ids) == 0 {
+		return nil, apperr.New(apperr.StaleSelection, "snapshot selection is empty or stale")
+	}
+	argv, err := restic.BuildSnapshotsArgv(restic.SnapshotsOpts{SnapshotIDs: ids})
+	if err != nil {
+		return nil, apperr.New(apperr.InternalError, "invalid stored snapshot selection").WithCause(err)
+	}
+	res, err := deps.Registry.Run(ctx, repoID, argv, false)
+	if err != nil {
+		return nil, err
+	}
+	snapshots, err := restic.ParseSnapshots(res.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]restic.Snapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		byID[snapshot.ID] = snapshot
+	}
+	out := make([]restic.Snapshot, 0, len(ids))
+	for _, id := range ids {
+		snapshot, ok := byID[id]
+		if !ok || !policyVisible(e, snapshot) {
+			return nil, apperr.New(apperr.StaleSelection, "snapshot selection changed; restart pagination")
+		}
+		out = append(out, snapshot)
+	}
+	return out, nil
 }
 
 func pathIsUnderAllow(child, parent string) bool {
@@ -664,9 +908,6 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, err)
 		}
-		if in.Pattern == "" {
-			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "pattern is required"))
-		}
 		lim := deps.Registry.Limits()
 		limit := in.Limit
 		if limit < 0 {
@@ -675,79 +916,107 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 		if limit == 0 || limit > lim.MaxFindResults {
 			limit = lim.MaxFindResults
 		}
-		opts := restic.FindOpts{
-			Pattern:    in.Pattern,
-			IgnoreCase: in.IgnoreCase,
-		}
-		scopePath := in.Path
-		if scopePath == "" {
-			switch len(e.Paths.Allowed) {
-			case 1:
-				scopePath = e.Paths.Allowed[0]
-			case 0:
-				// The repository has no path restriction.
-			default:
-				return failTool(
-					deps,
-					tool,
-					in.RepositoryID,
-					apperr.New(apperr.InvalidArgument, "path is required when multiple allowed_paths are configured"),
-				)
+
+		var state cursorState
+		var snapshots []restic.Snapshot
+		if in.Cursor != "" {
+			if in.Pattern != "" || in.Path != "" || in.SnapshotID != "" || in.Host != "" ||
+				len(in.Tags) > 0 || in.IgnoreCase {
+				return failTool(deps, tool, in.RepositoryID, apperr.New(
+					apperr.InvalidArgument,
+					"cursor carries the original filters; pass only repository_id, cursor, and optionally limit",
+				))
 			}
-		}
-		if scopePath != "" {
-			p, err := e.Paths.Check(scopePath)
+			state, err = deps.cursors.take(in.Cursor, tool, in.RepositoryID)
 			if err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
-			scopePath = p
-		}
-		// Reject unsafe patterns before probing repository metadata.
-		if _, err := restic.BuildFindArgv(opts); err != nil {
-			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, err.Error()))
+			snapshots, err = snapshotsByIDs(ctx, deps, e, in.RepositoryID, state.SnapshotIDs)
+			if err != nil {
+				return failTool(deps, tool, in.RepositoryID, err)
+			}
+		} else {
+			if in.Pattern == "" {
+				return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "pattern is required"))
+			}
+			scopePath := in.Path
+			if scopePath == "" {
+				switch len(e.Paths.Allowed) {
+				case 1:
+					scopePath = e.Paths.Allowed[0]
+				case 0:
+					// The repository has no path restriction.
+				default:
+					return failTool(
+						deps,
+						tool,
+						in.RepositoryID,
+						apperr.New(apperr.InvalidArgument, "path is required when multiple allowed_paths are configured"),
+					)
+				}
+			}
+			if scopePath != "" {
+				p, pathErr := e.Paths.Check(scopePath)
+				if pathErr != nil {
+					return failTool(deps, tool, in.RepositoryID, pathErr)
+				}
+				scopePath = p
+			}
+			state = cursorState{
+				Tool:       tool,
+				Repository: in.RepositoryID,
+				Path:       scopePath,
+				Pattern:    in.Pattern,
+				IgnoreCase: in.IgnoreCase,
+			}
+			// Reject unsafe patterns before probing repository metadata.
+			if _, err := restic.BuildFindArgv(restic.FindOpts{Pattern: in.Pattern, IgnoreCase: in.IgnoreCase}); err != nil {
+				return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, err.Error()))
+			}
+
+			if in.SnapshotID != "" {
+				if !restic.ValidSnapshotID(in.SnapshotID) || in.SnapshotID == "latest" {
+					return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "snapshot_id must be a concrete id"))
+				}
+				snapshot, snapshotErr := resolveVisibleSnapshot(
+					ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, scopePath,
+				)
+				if snapshotErr != nil {
+					return failTool(deps, tool, in.RepositoryID, snapshotErr)
+				}
+				snapshots = []restic.Snapshot{snapshot}
+			} else {
+				snapshots, err = visibleSnapshots(
+					ctx, deps, e, in.RepositoryID, "", in.Host, in.Tags, scopePath,
+				)
+				if err != nil {
+					return failTool(deps, tool, in.RepositoryID, err)
+				}
+				if len(snapshots) > lim.MaxSnapshots {
+					return failTool(
+						deps,
+						tool,
+						in.RepositoryID,
+						apperr.New(apperr.InvalidArgument, "query matches too many snapshots; add a host, tag, path, or snapshot_id filter"),
+					)
+				}
+			}
+			state.SnapshotIDs = make([]string, 0, len(snapshots))
+			for _, snapshot := range snapshots {
+				state.SnapshotIDs = append(state.SnapshotIDs, snapshot.ID)
+			}
 		}
 
-		var snapshots []restic.Snapshot
-		if in.SnapshotID != "" {
-			if !restic.ValidSnapshotID(in.SnapshotID) || in.SnapshotID == "latest" {
-				return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "snapshot_id must be a concrete id"))
-			}
-			snapshot, err := resolveVisibleSnapshot(
-				ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, scopePath,
-			)
-			if err != nil {
-				return failTool(deps, tool, in.RepositoryID, err)
-			}
-			snapshots = []restic.Snapshot{snapshot}
-		} else {
-			snapshots, err = visibleSnapshots(
-				ctx, deps, e, in.RepositoryID, "", in.Host, in.Tags, scopePath,
-			)
-			if err != nil {
-				return failTool(deps, tool, in.RepositoryID, err)
-			}
-			if len(snapshots) > lim.MaxSnapshots {
-				return failTool(
-					deps,
-					tool,
-					in.RepositoryID,
-					apperr.New(apperr.InvalidArgument, "query matches too many snapshots; add a host, tag, path, or snapshot_id filter"),
-				)
-			}
-		}
 		if len(snapshots) == 0 {
 			cost := restic.CostExpensive
-			if in.SnapshotID != "" {
-				cost = restic.CostModerate
-			}
-			return okResult(cost, map[string]any{"groups": []restic.FindGroup{}, "count": 0}, false)
-		}
-		opts.SnapshotIDs = make([]string, 0, len(snapshots))
-		for _, snapshot := range snapshots {
-			opts.SnapshotIDs = append(opts.SnapshotIDs, snapshot.ID)
+			return okResult(cost, map[string]any{"groups": []restic.FindGroup{}, "count": 0, "total": 0}, false)
 		}
 
-		argv, err := restic.BuildFindArgv(opts)
+		argv, err := restic.BuildFindArgv(restic.FindOpts{
+			Pattern:     state.Pattern,
+			IgnoreCase:  state.IgnoreCase,
+			SnapshotIDs: state.SnapshotIDs,
+		})
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, err.Error()))
 		}
@@ -755,56 +1024,123 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 		if err != nil {
 			return errTool(err), nil, nil
 		}
-		// Parse all matches present in the already byte-bounded process output,
-		// then apply path policy before enforcing the client-visible result limit.
-		groups, _, _, err := restic.ParseFind(res.Stdout, lim.MaxOutputBytes)
+		groups, _, parseTruncated, err := restic.ParseFind(res.Stdout, lim.MaxOutputBytes)
 		if err != nil {
 			return errTool(err), nil, nil
 		}
-		visible := 0
-		truncated := false
-		kept := make([]restic.FindGroup, 0, len(groups))
-		for _, g := range groups {
-			if !findGroupAuthorized(g.Snapshot, snapshots) {
-				continue
-			}
-			m := make([]restic.FindMatch, 0, len(g.Matches))
-			for _, match := range g.Matches {
-				cleaned, cleanErr := policy.CleanPath(match.Path)
-				if cleanErr != nil || !e.Paths.IsAllowed(cleaned) {
-					continue
-				}
-				if scopePath != "" && !pathIsUnderAllow(cleaned, scopePath) {
-					continue
-				}
-				if visible >= limit {
-					truncated = true
-					continue
-				}
-				match.Path = redaction.SanitizeAndRedact(cleaned)
-				match.Name = redaction.SanitizeAndRedact(match.Name)
-				match.Type = redaction.SanitizeAndRedact(match.Type)
-				m = append(m, match)
-				visible++
-			}
-			if len(m) == 0 {
-				continue
-			}
-			g.Matches = m
-			g.Hits = uint64(len(m))
-			g.Snapshot = redaction.SanitizeString(g.Snapshot)
-			kept = append(kept, g)
+		page, visibleCount, totalVisible, err := paginateFindGroups(groups, snapshots, e, state.Path, state.Offset, limit)
+		if err != nil {
+			return errTool(err), nil, nil
 		}
 		out := map[string]any{
-			"groups": kept,
-			"count":  visible,
+			"groups":     page,
+			"count":      visibleCount,
+			"incomplete": parseTruncated,
 		}
-		cost := restic.CostModerate
-		if in.SnapshotID == "" {
-			cost = restic.CostExpensive
+		if !parseTruncated {
+			out["total"] = totalVisible
+		}
+		truncated := parseTruncated || state.Offset+visibleCount < totalVisible
+		if !parseTruncated && state.Offset+visibleCount < totalVisible {
+			next, cursorErr := deps.cursors.issue(cursorState{
+				Tool:        tool,
+				Repository:  in.RepositoryID,
+				Path:        state.Path,
+				Pattern:     state.Pattern,
+				IgnoreCase:  state.IgnoreCase,
+				SnapshotIDs: state.SnapshotIDs,
+				Offset:      state.Offset + visibleCount,
+			})
+			if cursorErr != nil {
+				return errTool(cursorErr), nil, nil
+			}
+			out["next_cursor"] = next
+		}
+		cost := restic.CostExpensive
+		if len(state.SnapshotIDs) == 1 {
+			cost = restic.CostModerate
 		}
 		return okResult(cost, out, truncated)
 	}
+}
+
+func paginateFindGroups(
+	groups []restic.FindGroup,
+	snapshots []restic.Snapshot,
+	e *repositories.Entry,
+	scopePath string,
+	offset, limit int,
+) ([]restic.FindGroup, int, int, error) {
+	type orderedGroup struct {
+		snapshot string
+		matches  []restic.FindMatch
+	}
+	ordered := make([]orderedGroup, 0, len(groups))
+	totalVisible := 0
+	for _, g := range groups {
+		if !findGroupAuthorized(g.Snapshot, snapshots) {
+			continue
+		}
+		matches := make([]restic.FindMatch, 0, len(g.Matches))
+		for _, match := range g.Matches {
+			cleaned, cleanErr := policy.CleanPath(match.Path)
+			if cleanErr != nil || !e.Paths.IsAllowed(cleaned) {
+				continue
+			}
+			if scopePath != "" && !pathIsUnderAllow(cleaned, scopePath) {
+				continue
+			}
+			match.Path = redaction.SanitizeAndRedact(cleaned)
+			match.Name = redaction.SanitizeAndRedact(match.Name)
+			match.Type = redaction.SanitizeAndRedact(match.Type)
+			matches = append(matches, match)
+		}
+		if len(matches) == 0 {
+			continue
+		}
+		sort.SliceStable(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+		ordered = append(ordered, orderedGroup{snapshot: g.Snapshot, matches: matches})
+		totalVisible += len(matches)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].snapshot < ordered[j].snapshot })
+	if offset > totalVisible {
+		offset = totalVisible
+	}
+	remaining := totalVisible - offset
+	pageLimit := limit
+	if pageLimit > remaining {
+		pageLimit = remaining
+	}
+	page := make([]restic.FindGroup, 0, len(ordered))
+	skipped := 0
+	collected := 0
+	for _, group := range ordered {
+		if collected >= pageLimit {
+			break
+		}
+		pageMatches := make([]restic.FindMatch, 0, len(group.matches))
+		for _, match := range group.matches {
+			if skipped < offset {
+				skipped++
+				continue
+			}
+			if collected >= pageLimit {
+				break
+			}
+			pageMatches = append(pageMatches, match)
+			collected++
+		}
+		if len(pageMatches) == 0 {
+			continue
+		}
+		snapshot := redaction.SanitizeString(group.snapshot)
+		page = append(page, restic.FindGroup{
+			Hits:     uint64(len(pageMatches)),
+			Snapshot: snapshot,
+			Matches:  pageMatches,
+		})
+	}
+	return page, collected, totalVisible, nil
 }
 
 func findGroupAuthorized(groupID string, snapshots []restic.Snapshot) bool {

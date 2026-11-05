@@ -48,6 +48,8 @@ Backend errors can contain repository locations even when they contain no passwo
 | `cancelled` | Caller cancelled the request (context cancelled) |
 | `output_limit_exceeded` | Stdout/stderr cap |
 | `protocol_error` | Unexpected restic JSON |
+| `cursor_invalid` | Cursor is malformed, expired, already used, or belongs to another request |
+| `stale_selection` | A snapshot frozen in a cursor was removed or is no longer visible |
 | `internal_error` | Other failure |
 | `config_error` | Boot/config only |
 
@@ -80,10 +82,16 @@ Output `data`: array of `{id, label?, backend, allowed_hosts, allowed_tags, allo
 | `tags` | string[] | each must be allowlisted |
 | `path` | string | absolute, allowlisted; selects snapshots whose roots overlap it in either direction |
 | `limit` | int | capped by config |
-| `offset` | int | pagination |
+| `offset` | int | legacy pagination offset |
+| `cursor` | string | opaque continuation; carries the original filters |
 
-Output: `{snapshots, count, total, offset, limit}` sorted newest first (UTC).
+Output: `{snapshots, count, total, offset, limit, next_cursor?}` sorted newest first (UTC).
 `truncated` is true when more results exist beyond the current offset/limit page.
+When a cursor is supplied, pass only `repository_id`, `cursor`, and optionally
+`limit`; combining a cursor with filters or `offset` returns `invalid_argument`.
+Cursors are single-use, expire after five minutes, and bind the repository,
+filters, and policy. Snapshot additions after the first page are not spliced into
+the same traversal. Restarting the server invalidates outstanding cursors.
 Snapshot objects omit `username`, `parent`, and `tree` (not needed for inspection).
 If the path policy exposes only a narrower intersection of a broader snapshot
 root, the whole-snapshot backup `summary` is omitted to avoid aggregate leakage.
@@ -110,10 +118,19 @@ Invisible snapshots are reported as `snapshot_not_found`.
 | `recursive` | bool | default false |
 | `limit` | int | capped by `max_nodes` |
 | `host` | string | optional policy-checked filter |
+| `cursor` | string | opaque continuation; carries the original scope |
 
 Output nodes: `name`, `type`, `path`, `size?`, `permissions?`, `mtime?`.
-No file contents. For `latest`, the required path scopes selection; `host` can
-narrow it further.
+No file contents. For `latest`, the required path scopes selection and the
+concrete snapshot is fixed before the first cursor is issued; `host` can narrow
+it further. With a cursor, pass only `repository_id`, `cursor`, and optionally
+`limit`.
+Output also includes `total` (visible nodes in the bounded scan) and
+`incomplete` (the restic output reached its cap). `truncated` is true when
+another page exists or the scan is incomplete; `next_cursor` exists only while
+another visible page can be requested. Hidden nodes are filtered before the page
+offset, so they never consume the visible page budget. Each page re-runs `restic
+ls`; this is continuation, not backend pagination.
 
 ### `find_files`
 
@@ -124,15 +141,22 @@ narrow it further.
 | `path` | string | optional with zero/one allowed root; required with multiple roots |
 | `snapshot_id` | string | concrete id only (not `latest`) |
 | `host`/`tags` | | policy checked |
-| `limit` | int | capped |
+| `limit` | int | page size, capped by `max_find_results` |
 | `ignore_case` | bool | |
+| `cursor` | string | opaque continuation; carries the original filters |
 
-Output: `{groups, count}` where `count` is the number of matches **after** path
-allowlist filtering (capped by `limit` / `max_find_results`).
+Output: `{groups, count, total?, incomplete, next_cursor?}` where `count` is the
+number of visible matches in this page. Each group's `hits` counts only that
+group's matches in this page; a group can span pages. `total` is published only
+after the underlying authorized scan completed, never for an incomplete scan.
 Each match includes `name`, derived from the validated POSIX snapshot path with
 `path.Base` when restic omits it; `name` therefore uses the same spelling as
 `browse_snapshot`, including spaces and Unicode.
-`truncated` is true only when additional visible matches were omitted.
+With a cursor, pass only `repository_id`, `cursor`, and optionally `limit`.
+Hidden matches are filtered before the page offset. `truncated` is true when
+another visible page exists or the scan is incomplete. Cursors are single-use,
+expire after five minutes, and return `stale_selection` if a frozen snapshot was
+removed. Each page re-runs `restic find`; this is not backend pagination.
 The server first selects visible snapshot IDs by root intersection, then filters
 and limits matches inside the requested scope. With one configured root, an
 omitted `path` uses that root automatically.

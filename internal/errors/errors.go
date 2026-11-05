@@ -28,6 +28,8 @@ const (
 	InternalError         Code = "internal_error"
 	ConfigError           Code = "config_error"
 	RepositoryUnavailable Code = "repository_unavailable"
+	CursorInvalid         Code = "cursor_invalid"
+	StaleSelection        Code = "stale_selection"
 )
 
 // Error is a structured application error safe for MCP clients.
