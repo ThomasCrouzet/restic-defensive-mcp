@@ -14,9 +14,17 @@ codes:
 | 12 | wrong password |
 | 130 | cancelled |
 
-CI runs the integration suite with **restic 0.17.1** and **restic 0.19.1**.
+CI runs the Linux integration suite with **restic 0.17.1** and **restic 0.19.1**.
 The suite starts the real MCP executable and uses a temporary local repository.
 Remote backends require deployment-specific credentials and network checks.
+
+A native **macOS arm64** job validates the executable on `macos-14` with restic
+0.19.1. It records the macOS version, architecture, Go version, and restic
+version; requires an arm64 runner and binary; runs the executable stdio suite;
+and exercises native cancellation plus repository lock cleanup. During release,
+the job builds the intended macOS archive, verifies its version output, and runs
+the same suite against the extracted archive. This is native runtime evidence,
+separate from cross-compilation and earlier manual runs.
 
 ## JSON formats used
 

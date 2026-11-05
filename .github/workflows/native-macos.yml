@@ -1,0 +1,131 @@
+name: native-macos
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-macos.yml'
+      - '.github/workflows/release.yml'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'integration*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Release version to build and test (a leading v is stripped)
+        required: false
+        default: ''
+        type: string
+      source_revision:
+        description: Git revision to build; defaults to the workflow commit
+        required: false
+        default: ''
+        type: string
+      source_date_epoch:
+        description: Source timestamp; defaults to the revision commit time
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27.3'
+  RESTIC_VERSION: '0.19.1'
+  GOMAXPROCS: '2'
+
+jobs:
+  validate:
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: install restic
+        run: |
+          set -euo pipefail
+          asset="restic_${RESTIC_VERSION}_darwin_arm64.bz2"
+          base="https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}"
+          install_dir="$RUNNER_TEMP/restic-native"
+          mkdir -p "$install_dir"
+          curl -fsSL -o "$RUNNER_TEMP/$asset" "${base}/${asset}"
+          curl -fsSL -o "$RUNNER_TEMP/restic-SHA256SUMS" "${base}/SHA256SUMS"
+          expected="$(awk -v asset="$asset" '$2 == asset {print $1}' "$RUNNER_TEMP/restic-SHA256SUMS")"
+          test -n "$expected"
+          echo "$expected  $RUNNER_TEMP/$asset" | shasum -a 256 -c -
+          bunzip2 -c "$RUNNER_TEMP/$asset" >"$install_dir/restic"
+          chmod +x "$install_dir/restic"
+          "$install_dir/restic" version
+
+      - name: build native deliverable
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_REVISION: ${{ inputs.source_revision }}
+          REQUESTED_EPOCH: ${{ inputs.source_date_epoch }}
+        run: |
+          set -euo pipefail
+          revision="${REQUESTED_REVISION:-${GITHUB_SHA}}"
+          version="${REQUESTED_VERSION:-native-e2e}"
+          epoch="${REQUESTED_EPOCH:-$(git show -s --format=%ct "$revision")}"
+          echo "source_revision=$(git rev-parse "$revision")"
+          echo "macos_version=$(sw_vers -productVersion)"
+          echo "runner_arch=$(uname -m)"
+          echo "go_version=$(go version)"
+          echo "restic_version=$("$RUNNER_TEMP/restic-native/restic" version)"
+          test "$(uname -m)" = "arm64"
+          if [ -n "${REQUESTED_VERSION:-}" ]; then
+            release_version="${REQUESTED_VERSION#v}"
+            python3 scripts/build_release.py \
+              --version "$release_version" \
+              --output-dir dist \
+              --source-date-epoch "$epoch"
+            archive="dist/restic-defensive-mcp_${release_version}_darwin_arm64.tar.gz"
+            test -f "$archive"
+            mkdir -p verify
+            tar -xzf "$archive" -C verify
+            test "$(verify/restic-defensive-mcp --version)" = "restic-defensive-mcp ${release_version}"
+            echo "tested_archive=$archive" >>"$GITHUB_ENV"
+            binary="$PWD/verify/restic-defensive-mcp"
+          else
+            mkdir -p dist
+            CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-X main.version=${version}" \
+              -o dist/restic-defensive-mcp ./cmd/restic-defensive-mcp
+            binary="$PWD/dist/restic-defensive-mcp"
+          fi
+          file "$binary"
+          lipo -archs "$binary" | grep -qw arm64
+          echo "RESTIC_MCP_BINARY=$binary" >>"$GITHUB_ENV"
+
+      - name: executable stdio and cancellation suite
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/restic-defensive-mcp-macos-e2e"
+          mkdir -p "$artifact_dir"
+          command="GOMAXPROCS=2 GOFLAGS=-p=1 go test -tags=integration -run '^(TestExecutableStdioEndToEnd|TestExecutableCancellationReleasesRepositoryLock)$' -count=1 -timeout 8m -v ."
+          PATH="$RUNNER_TEMP/restic-native:$PATH" \
+            GOMAXPROCS=2 \
+            GOFLAGS=-p=1 \
+            RESTIC_MCP_ARTIFACT_DIR="$artifact_dir" \
+            RESTIC_MCP_BINARY="$RESTIC_MCP_BINARY" \
+            RESTIC_MCP_E2E_COMMAND="$command" \
+            go test -tags=integration \
+              -run '^(TestExecutableStdioEndToEnd|TestExecutableCancellationReleasesRepositoryLock)$' \
+              -count=1 -timeout 8m -v .
