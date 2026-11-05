@@ -211,6 +211,8 @@ type listSnapshotsIn struct {
 	Path         string   `json:"path,omitempty" jsonschema:"optional path filter (must be allowlisted)"`
 	Limit        int      `json:"limit,omitempty" jsonschema:"max snapshots to return"`
 	Offset       int      `json:"offset,omitempty" jsonschema:"pagination offset"`
+	After        string   `json:"after,omitempty" jsonschema:"optional RFC 3339 inclusive lower bound on snapshot creation time"`
+	Before       string   `json:"before,omitempty" jsonschema:"optional RFC 3339 exclusive upper bound on snapshot creation time"`
 	Cursor       string   `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
 }
 
@@ -220,6 +222,8 @@ type getSnapshotIn struct {
 	Host         string   `json:"host,omitempty" jsonschema:"required with latest if host allowlist or to disambiguate"`
 	Tags         []string `json:"tags,omitempty" jsonschema:"optional tags for latest disambiguation"`
 	Path         string   `json:"path,omitempty" jsonschema:"optional path for latest disambiguation"`
+	After        string   `json:"after,omitempty" jsonschema:"optional RFC 3339 inclusive lower bound on snapshot creation time"`
+	Before       string   `json:"before,omitempty" jsonschema:"optional RFC 3339 exclusive upper bound on snapshot creation time"`
 }
 
 type browseSnapshotIn struct {
@@ -229,6 +233,8 @@ type browseSnapshotIn struct {
 	Recursive    bool   `json:"recursive,omitempty" jsonschema:"default false"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"max nodes"`
 	Host         string `json:"host,omitempty" jsonschema:"optional host filter"`
+	After        string `json:"after,omitempty" jsonschema:"optional RFC 3339 inclusive lower bound on snapshot creation time"`
+	Before       string `json:"before,omitempty" jsonschema:"optional RFC 3339 exclusive upper bound on snapshot creation time"`
 	Cursor       string `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
 }
 
@@ -241,6 +247,8 @@ type findFilesIn struct {
 	Tags         []string `json:"tags,omitempty" jsonschema:"optional tags"`
 	Limit        int      `json:"limit,omitempty" jsonschema:"max matches"`
 	IgnoreCase   bool     `json:"ignore_case,omitempty"`
+	After        string   `json:"after,omitempty" jsonschema:"optional RFC 3339 inclusive lower bound on snapshot creation time; not a file mtime filter"`
+	Before       string   `json:"before,omitempty" jsonschema:"optional RFC 3339 exclusive upper bound on snapshot creation time; not a file mtime filter"`
 	Cursor       string   `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
 }
 
@@ -251,6 +259,8 @@ type repositoryStatsIn struct {
 	Host         string   `json:"host,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 	Path         string   `json:"path,omitempty"`
+	After        string   `json:"after,omitempty" jsonschema:"optional RFC 3339 inclusive lower bound on snapshot creation time"`
+	Before       string   `json:"before,omitempty" jsonschema:"optional RFC 3339 exclusive upper bound on snapshot creation time"`
 }
 
 func makeCapabilities(deps Deps) func(context.Context, *mcp.CallToolRequest, emptyIn) (*mcp.CallToolResult, any, error) {
@@ -312,9 +322,14 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 		if in.Offset < 0 {
 			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "offset must be >= 0"))
 		}
+		window, err := parseTimeWindow(in.After, in.Before)
+		if err != nil {
+			return failTool(deps, tool, in.RepositoryID, err)
+		}
 
 		if in.Cursor != "" {
-			if in.Offset != 0 || in.Host != "" || len(in.Tags) > 0 || in.Path != "" {
+			if in.Offset != 0 || in.Host != "" || len(in.Tags) > 0 || in.Path != "" ||
+				in.After != "" || in.Before != "" {
 				return failTool(deps, tool, in.RepositoryID, apperr.New(
 					apperr.InvalidArgument,
 					"cursor carries the original filters; pass only repository_id, cursor, and optionally limit",
@@ -339,6 +354,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 				"total":     total,
 				"offset":    start,
 				"limit":     limit,
+				"window":    windowOutput(state.After, state.Before),
 			}
 			if truncated {
 				next, cursorErr := deps.cursors.issue(cursorState{
@@ -347,6 +363,8 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 					Host:       state.Host,
 					Tags:       state.Tags,
 					Path:       state.Path,
+					After:      state.After,
+					Before:     state.Before,
 					LastTime:   page[len(page)-1].Time,
 					LastID:     page[len(page)-1].ID,
 					Offset:     end,
@@ -362,7 +380,13 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 
 		opts := restic.SnapshotsOpts{}
 		requestedPath := ""
-		state := cursorState{Tool: tool, Repository: in.RepositoryID}
+		normalizedAfter, normalizedBefore := window.normalized()
+		state := cursorState{
+			Tool:       tool,
+			Repository: in.RepositoryID,
+			After:      normalizedAfter,
+			Before:     normalizedBefore,
+		}
 		if in.Host != "" {
 			if err := e.Hosts.Check(in.Host); err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
@@ -405,7 +429,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 		// Server-side visibility filter (single policy implementation).
 		filtered := make([]restic.Snapshot, 0, len(snaps))
 		for _, s := range snaps {
-			if !policyVisible(e, s) || !matchesSnapshotFilters(s, in.Host, in.Tags, requestedPath) {
+			if !window.contains(s.Time) || !policyVisible(e, s) || !matchesSnapshotFilters(s, in.Host, in.Tags, requestedPath) {
 				continue
 			}
 			filtered = append(filtered, publicSnapshot(e, s))
@@ -428,6 +452,7 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			"total":     total,
 			"offset":    start,
 			"limit":     limit,
+			"window":    windowOutput(state.After, state.Before),
 		}
 		if truncated && len(page) > 0 {
 			next, cursorErr := deps.cursors.issue(cursorState{
@@ -436,6 +461,8 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 				Host:       state.Host,
 				Tags:       state.Tags,
 				Path:       state.Path,
+				After:      state.After,
+				Before:     state.Before,
 				LastTime:   page[len(page)-1].Time,
 				LastID:     page[len(page)-1].ID,
 				Offset:     end,
@@ -458,6 +485,10 @@ func listSnapshotsForCursor(
 	state cursorState,
 	limit int,
 ) ([]restic.Snapshot, bool, error) {
+	window, err := parseTimeWindow(state.After, state.Before)
+	if err != nil {
+		return nil, false, apperr.New(apperr.CursorInvalid, "cursor carries an invalid time window")
+	}
 	opts := restic.SnapshotsOpts{}
 	if state.Host != "" {
 		if err := e.Hosts.Check(state.Host); err != nil {
@@ -488,7 +519,9 @@ func listSnapshotsForCursor(
 	out := make([]restic.Snapshot, 0, limit+1)
 	more := false
 	for _, snapshot := range snaps {
-		if !policyVisible(e, snapshot) || !matchesSnapshotFilters(snapshot, state.Host, state.Tags, state.Path) {
+		if !window.contains(snapshot.Time) ||
+			!policyVisible(e, snapshot) ||
+			!matchesSnapshotFilters(snapshot, state.Host, state.Tags, state.Path) {
 			continue
 		}
 		if !afterSnapshotMarker(snapshot, state.LastTime, state.LastID) {
@@ -511,6 +544,21 @@ func afterSnapshotMarker(snapshot restic.Snapshot, lastTime time.Time, lastID st
 		return true
 	}
 	return snapshot.Time.Equal(lastTime) && snapshot.ID > lastID
+}
+
+func windowOutput(after, before string) map[string]any {
+	out := map[string]any{
+		"after":   nil,
+		"before":  nil,
+		"bounded": after != "" || before != "",
+	}
+	if after != "" {
+		out["after"] = after
+	}
+	if before != "" {
+		out["before"] = before
+	}
+	return out
 }
 
 func policyVisible(e *repositories.Entry, s restic.Snapshot) bool {
@@ -548,6 +596,7 @@ func visibleSnapshots(
 	host string,
 	tags []string,
 	requestPath string,
+	window timeWindow,
 ) ([]restic.Snapshot, error) {
 	opts := restic.SnapshotsOpts{}
 	if host != "" {
@@ -593,7 +642,7 @@ func visibleSnapshots(
 		if !policyVisible(e, snapshot) {
 			continue
 		}
-		if !matchesSnapshotFilters(snapshot, host, tags, requestPath) {
+		if !window.contains(snapshot.Time) || !matchesSnapshotFilters(snapshot, host, tags, requestPath) {
 			continue
 		}
 		if selector != "" && selector != "latest" && !snapshotIDMatches(snapshot.ID, selector) {
@@ -649,8 +698,9 @@ func resolveVisibleSnapshot(
 	host string,
 	tags []string,
 	requestPath string,
+	window timeWindow,
 ) (restic.Snapshot, error) {
-	snapshots, err := visibleSnapshots(ctx, deps, e, repoID, selector, host, tags, requestPath)
+	snapshots, err := visibleSnapshots(ctx, deps, e, repoID, selector, host, tags, requestPath, window)
 	if err != nil {
 		return restic.Snapshot{}, err
 	}
@@ -690,13 +740,17 @@ func makeGetSnapshot(deps Deps) func(context.Context, *mcp.CallToolRequest, getS
 		if !restic.ValidSnapshotID(in.SnapshotID) {
 			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "invalid snapshot_id"))
 		}
+		window, err := parseTimeWindow(in.After, in.Before)
+		if err != nil {
+			return failTool(deps, tool, in.RepositoryID, err)
+		}
 		if in.SnapshotID == "latest" {
 			if err := validateLatestScope(e, in.Host, in.Tags, in.Path); err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
 			}
 		}
 		snapshot, err := resolveVisibleSnapshot(
-			ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, in.Path,
+			ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, in.Path, window,
 		)
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, err)
@@ -720,10 +774,15 @@ func makeBrowseSnapshot(deps Deps) func(context.Context, *mcp.CallToolRequest, b
 		if limit == 0 || limit > lim.MaxNodes {
 			limit = lim.MaxNodes
 		}
+		window, err := parseTimeWindow(in.After, in.Before)
+		if err != nil {
+			return failTool(deps, tool, in.RepositoryID, err)
+		}
 
 		var state cursorState
 		if in.Cursor != "" {
-			if in.SnapshotID != "" || in.Path != "" || in.Host != "" || in.Recursive {
+			if in.SnapshotID != "" || in.Path != "" || in.Host != "" || in.Recursive ||
+				in.After != "" || in.Before != "" {
 				return failTool(deps, tool, in.RepositoryID, apperr.New(
 					apperr.InvalidArgument,
 					"cursor carries the original scope; pass only repository_id, cursor, and optionally limit",
@@ -747,7 +806,7 @@ func makeBrowseSnapshot(deps Deps) func(context.Context, *mcp.CallToolRequest, b
 				}
 			}
 			snapshot, snapshotErr := resolveVisibleSnapshot(
-				ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, nil, path,
+				ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, nil, path, window,
 			)
 			if snapshotErr != nil {
 				return failTool(deps, tool, in.RepositoryID, snapshotErr)
@@ -921,7 +980,7 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 		var snapshots []restic.Snapshot
 		if in.Cursor != "" {
 			if in.Pattern != "" || in.Path != "" || in.SnapshotID != "" || in.Host != "" ||
-				len(in.Tags) > 0 || in.IgnoreCase {
+				len(in.Tags) > 0 || in.IgnoreCase || in.After != "" || in.Before != "" {
 				return failTool(deps, tool, in.RepositoryID, apperr.New(
 					apperr.InvalidArgument,
 					"cursor carries the original filters; pass only repository_id, cursor, and optionally limit",
@@ -939,6 +998,11 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 			if in.Pattern == "" {
 				return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "pattern is required"))
 			}
+			window, windowErr := parseTimeWindow(in.After, in.Before)
+			if windowErr != nil {
+				return failTool(deps, tool, in.RepositoryID, windowErr)
+			}
+			normalizedAfter, normalizedBefore := window.normalized()
 			scopePath := in.Path
 			if scopePath == "" {
 				switch len(e.Paths.Allowed) {
@@ -966,6 +1030,8 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 				Tool:       tool,
 				Repository: in.RepositoryID,
 				Path:       scopePath,
+				After:      normalizedAfter,
+				Before:     normalizedBefore,
 				Pattern:    in.Pattern,
 				IgnoreCase: in.IgnoreCase,
 			}
@@ -979,7 +1045,7 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 					return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "snapshot_id must be a concrete id"))
 				}
 				snapshot, snapshotErr := resolveVisibleSnapshot(
-					ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, scopePath,
+					ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, scopePath, window,
 				)
 				if snapshotErr != nil {
 					return failTool(deps, tool, in.RepositoryID, snapshotErr)
@@ -987,7 +1053,7 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 				snapshots = []restic.Snapshot{snapshot}
 			} else {
 				snapshots, err = visibleSnapshots(
-					ctx, deps, e, in.RepositoryID, "", in.Host, in.Tags, scopePath,
+					ctx, deps, e, in.RepositoryID, "", in.Host, in.Tags, scopePath, window,
 				)
 				if err != nil {
 					return failTool(deps, tool, in.RepositoryID, err)
@@ -997,7 +1063,7 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 						deps,
 						tool,
 						in.RepositoryID,
-						apperr.New(apperr.InvalidArgument, "query matches too many snapshots; add a host, tag, path, or snapshot_id filter"),
+						apperr.New(apperr.InvalidArgument, "query matches too many snapshots; add a host, tag, path, after, before, or snapshot_id filter"),
 					)
 				}
 			}
@@ -1036,6 +1102,7 @@ func makeFindFiles(deps Deps) func(context.Context, *mcp.CallToolRequest, findFi
 			"groups":     page,
 			"count":      visibleCount,
 			"incomplete": parseTruncated,
+			"window":     windowOutput(state.After, state.Before),
 		}
 		if !parseTruncated {
 			out["total"] = totalVisible
@@ -1173,6 +1240,11 @@ func makeRepositoryStats(deps Deps) func(context.Context, *mcp.CallToolRequest, 
 		if in.SnapshotID != "" && !restic.ValidSnapshotID(in.SnapshotID) {
 			return failTool(deps, tool, in.RepositoryID, apperr.New(apperr.InvalidArgument, "invalid snapshot_id"))
 		}
+		window, err := parseTimeWindow(in.After, in.Before)
+		if err != nil {
+			return failTool(deps, tool, in.RepositoryID, err)
+		}
+		normalizedAfter, normalizedBefore := window.normalized()
 		if in.SnapshotID == "latest" {
 			if err := validateLatestScope(e, in.Host, in.Tags, in.Path); err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
@@ -1182,7 +1254,7 @@ func makeRepositoryStats(deps Deps) func(context.Context, *mcp.CallToolRequest, 
 		var snapshots []restic.Snapshot
 		if in.SnapshotID != "" {
 			snapshot, err := resolveVisibleSnapshot(
-				ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, in.Path,
+				ctx, deps, e, in.RepositoryID, in.SnapshotID, in.Host, in.Tags, in.Path, window,
 			)
 			if err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
@@ -1190,7 +1262,7 @@ func makeRepositoryStats(deps Deps) func(context.Context, *mcp.CallToolRequest, 
 			snapshots = []restic.Snapshot{snapshot}
 		} else {
 			snapshots, err = visibleSnapshots(
-				ctx, deps, e, in.RepositoryID, "", in.Host, in.Tags, in.Path,
+				ctx, deps, e, in.RepositoryID, "", in.Host, in.Tags, in.Path, window,
 			)
 			if err != nil {
 				return failTool(deps, tool, in.RepositoryID, err)
@@ -1223,7 +1295,7 @@ func makeRepositoryStats(deps Deps) func(context.Context, *mcp.CallToolRequest, 
 				deps,
 				tool,
 				in.RepositoryID,
-				apperr.New(apperr.InvalidArgument, "query matches too many snapshots; add a host, tag, path, or snapshot_id filter"),
+				apperr.New(apperr.InvalidArgument, "query matches too many snapshots; add a host, tag, path, after, before, or snapshot_id filter"),
 			)
 		}
 
@@ -1264,6 +1336,7 @@ func makeRepositoryStats(deps Deps) func(context.Context, *mcp.CallToolRequest, 
 			},
 			"selected_snapshots": len(eligible),
 			"excluded_snapshots": excluded,
+			"window":             windowOutput(normalizedAfter, normalizedBefore),
 		}
 		return okResult(cost, out, false)
 	}

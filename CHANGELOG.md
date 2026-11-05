@@ -33,6 +33,10 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Add bounded `after`/`before` snapshot-creation windows to listing, retrieval,
+  browsing, search, and statistics; intervals are normalized to UTC and use
+  `[after, before)`.
+
 - Add bounded, single-use continuation cursors for snapshot listing, directory
   browsing, and file searches. Hidden entries are filtered before paging, and
   removed snapshot selections fail with `stale_selection`.

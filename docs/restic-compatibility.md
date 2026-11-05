@@ -74,6 +74,14 @@ snapshots while a child scope still selects its concrete snapshot. When a
 repository exposes multiple allowed roots, the caller must choose one
 explicitly.
 
+## Snapshot time windows
+
+`after` and `before` accept RFC 3339 timestamps with an explicit offset and form
+a half-open `[after, before)` interval on restic snapshot creation time. The
+server normalizes them to UTC and filters snapshots before invoking `find` or
+`stats`. They are not translated into restic's file-time `--oldest`/`--newest`
+find flags.
+
 ## Continuation cursors
 
 `list_snapshots`, `browse_snapshot`, and `find_files` can return an opaque
