@@ -54,7 +54,12 @@ The suite covers two boundaries:
 - In-memory MCP calls use real restic commands.
 - Executable tests build the server, load YAML, and exchange MCP messages through stdio.
 
-Executable tests cover startup, version output, all seven tools, and nonempty metadata results.
+Executable tests cover mixed and nested visibility policies with real
+repositories: mixed visible/hidden roots, snapshot roots broader than the
+allowlist, allowlisted parents broader than backed-up children, nested and
+overlapping allowlists, `/`, disjoint roots, hidden hosts and tags, scoped
+`latest`, and whole-snapshot statistics restrictions.
+They also cover startup, version output, all seven tools, and nonempty metadata results.
 They also cover path denial, pagination, empty results, credential restrictions, and the separation of stdout and stderr.
 Configuration diagnostics are exercised through the executable for valid,
 invalid, permission-failing, unreachable, and machine-readable results, including

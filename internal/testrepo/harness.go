@@ -44,6 +44,17 @@ type BackupDescription struct {
 	Tags  []string `json:"tags"`
 }
 
+// ConfigPolicy overrides the fixture's default visibility policy and bounds.
+// Zero numeric values keep the fixture defaults.
+type ConfigPolicy struct {
+	AllowedHosts   []string
+	AllowedTags    []string
+	AllowedPaths   []string
+	MaxSnapshots   int
+	MaxNodes       int
+	MaxFindResults int
+}
+
 // S3Credentials defines synthetic static credentials for startup checks.
 type S3Credentials struct {
 	AccessKeyID     *string
@@ -157,7 +168,17 @@ func (f *Fixture) WriteConfig(path, resticBinary string) error {
 // Hosts and tags keep the fixture defaults; callers use this to exercise path
 // policy intersections without changing repository contents.
 func (f *Fixture) WriteConfigForPaths(path, resticBinary string, allowedPaths []string) error {
-	return f.writeConfig(path, resticBinary, f.RepositoryFile, "", allowedPaths)
+	return f.WriteConfigWithPolicy(path, resticBinary, ConfigPolicy{
+		AllowedHosts: []string{f.Host},
+		AllowedTags:  []string{"daily", "weekly", "test", "missing"},
+		AllowedPaths: allowedPaths,
+	})
+}
+
+// WriteConfigWithPolicy writes a fixture configuration with explicit visibility
+// policy and optional limit overrides.
+func (f *Fixture) WriteConfigWithPolicy(path, resticBinary string, policy ConfigPolicy) error {
+	return f.writeConfig(path, resticBinary, f.RepositoryFile, "", policy)
 }
 
 // WriteConfigWithBlockedEnvKey writes a config that must fail during startup.
@@ -175,7 +196,11 @@ func (f *Fixture) WriteConfigWithBlockedEnvKey(path, resticBinary, key string) e
 	if err := os.WriteFile(envPath, []byte(key+"="+value+"\n"), 0o600); err != nil {
 		return err
 	}
-	return f.writeConfig(path, resticBinary, f.RepositoryFile, envPath, []string{f.DataDir1, f.DataDir2})
+	return f.writeConfig(path, resticBinary, f.RepositoryFile, envPath, ConfigPolicy{
+		AllowedHosts: []string{f.Host},
+		AllowedTags:  []string{"daily", "weekly", "test", "missing"},
+		AllowedPaths: []string{f.DataDir1, f.DataDir2},
+	})
 }
 
 // WriteS3Config writes a synthetic S3 configuration without contacting a backend.
@@ -199,26 +224,35 @@ func (f *Fixture) WriteS3Config(path, resticBinary string, credentials S3Credent
 			return err
 		}
 	}
-	return f.writeConfig(path, resticBinary, repositoryPath, envPath, []string{f.DataDir1, f.DataDir2})
+	return f.writeConfig(path, resticBinary, repositoryPath, envPath, ConfigPolicy{
+		AllowedHosts: []string{f.Host},
+		AllowedTags:  []string{"daily", "weekly", "test", "missing"},
+		AllowedPaths: []string{f.DataDir1, f.DataDir2},
+	})
 }
 
-func (f *Fixture) writeConfig(path, resticBinary, repositoryPath, envPath string, allowedPaths []string) error {
+func (f *Fixture) writeConfig(path, resticBinary, repositoryPath, envPath string, policy ConfigPolicy) error {
+	if policy.MaxSnapshots == 0 {
+		policy.MaxSnapshots = 50
+	}
+	if policy.MaxNodes == 0 {
+		policy.MaxNodes = 200
+	}
+	if policy.MaxFindResults == 0 {
+		policy.MaxFindResults = 100
+	}
 	envFiles := ""
 	if envPath != "" {
 		envFiles = fmt.Sprintf("    env_files: [%q]\n", envPath)
-	}
-	quotedPaths := make([]string, 0, len(allowedPaths))
-	for _, allowed := range allowedPaths {
-		quotedPaths = append(quotedPaths, strconv.Quote(allowed))
 	}
 	content := fmt.Sprintf(`version: 1
 restic_binary: %q
 limits:
   command_timeout: 60s
   expensive_command_timeout: 2m
-  max_snapshots: 50
-  max_nodes: 200
-  max_find_results: 100
+  max_snapshots: %d
+  max_nodes: %d
+  max_find_results: %d
   max_output_bytes: 4194304
   max_concurrent_per_repo: 1
   max_concurrent_global: 2
@@ -228,11 +262,22 @@ repositories:
     repository_file: %q
     password_file: %q
     cache_dir: %q
-    allowed_hosts: [%q]
-    allowed_tags: [daily, weekly, test, missing]
+    allowed_hosts: [%s]
+    allowed_tags: [%s]
     allowed_paths: [%s]
-%s`, resticBinary, repositoryPath, f.PasswordFile, f.CacheDir, f.Host, strings.Join(quotedPaths, ", "), envFiles)
+%s`, resticBinary, policy.MaxSnapshots, policy.MaxNodes, policy.MaxFindResults,
+		repositoryPath, f.PasswordFile, f.CacheDir,
+		quotedYAMLList(policy.AllowedHosts), quotedYAMLList(policy.AllowedTags), quotedYAMLList(policy.AllowedPaths),
+		envFiles)
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+func quotedYAMLList(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, strconv.Quote(value))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // WriteInvalidConfig writes malformed YAML for executable startup checks.

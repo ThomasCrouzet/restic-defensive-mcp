@@ -57,6 +57,9 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Expand executable coverage for mixed and nested visibility policies,
+  including hidden hosts/tags and whole-snapshot statistics restrictions.
+
 - Require Go 1.26 or later. Use a current patch release of a supported Go version.
 - Build CI and release binaries with Go 1.27.3.
 - Update lint, vulnerability scanning, and cache tooling.
