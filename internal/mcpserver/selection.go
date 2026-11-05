@@ -78,7 +78,7 @@ func visibleSnapshots(
 	if err != nil {
 		return nil, apperr.New(apperr.InvalidArgument, err.Error())
 	}
-	res, err := deps.Registry.Run(ctx, repoID, argv, false)
+	res, _, err := deps.Registry.RunMetadata(ctx, repoID, argv)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func snapshotsByIDs(
 	if err != nil {
 		return nil, apperr.New(apperr.InternalError, "invalid stored snapshot selection").WithCause(err)
 	}
-	res, err := deps.Registry.Run(ctx, repoID, argv, false)
+	res, _, err := deps.Registry.RunMetadata(ctx, repoID, argv)
 	if err != nil {
 		return nil, err
 	}

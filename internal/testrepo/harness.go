@@ -47,12 +47,14 @@ type BackupDescription struct {
 // ConfigPolicy overrides the fixture's default visibility policy and bounds.
 // Zero numeric values keep the fixture defaults.
 type ConfigPolicy struct {
-	AllowedHosts   []string
-	AllowedTags    []string
-	AllowedPaths   []string
-	MaxSnapshots   int
-	MaxNodes       int
-	MaxFindResults int
+	AllowedHosts         []string
+	AllowedTags          []string
+	AllowedPaths         []string
+	MaxSnapshots         int
+	MaxNodes             int
+	MaxFindResults       int
+	MetadataCacheTTL     time.Duration
+	MetadataCacheMaxSize int
 }
 
 // S3Credentials defines synthetic static credentials for startup checks.
@@ -256,6 +258,8 @@ limits:
   max_output_bytes: 4194304
   max_concurrent_per_repo: 1
   max_concurrent_global: 2
+  metadata_cache_ttl: %s
+  metadata_cache_max_entries: %d
 repositories:
   - id: tmp-local
     label: Integration
@@ -266,6 +270,7 @@ repositories:
     allowed_tags: [%s]
     allowed_paths: [%s]
 %s`, resticBinary, policy.MaxSnapshots, policy.MaxNodes, policy.MaxFindResults,
+		policy.MetadataCacheTTL.String(), policy.MetadataCacheMaxSize,
 		repositoryPath, f.PasswordFile, f.CacheDir,
 		quotedYAMLList(policy.AllowedHosts), quotedYAMLList(policy.AllowedTags), quotedYAMLList(policy.AllowedPaths),
 		envFiles)

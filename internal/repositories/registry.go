@@ -39,22 +39,24 @@ type PublicInfo struct {
 
 // Registry is the frozen set of repositories after boot.
 type Registry struct {
-	entries map[string]*Entry
-	order   []string
-	limits  config.Limits
-	runner  restic.Runner
-	audit   *audit.Logger
-	global  chan struct{}
+	entries  map[string]*Entry
+	order    []string
+	limits   config.Limits
+	runner   restic.Runner
+	audit    *audit.Logger
+	global   chan struct{}
+	metadata *metadataCoalescer
 }
 
 // New builds a registry from validated config. It classifies backends and builds child envs.
 func New(cfg *config.Config, runner restic.Runner, log *audit.Logger) (*Registry, error) {
 	r := &Registry{
-		entries: make(map[string]*Entry, len(cfg.Repositories)),
-		limits:  cfg.Limits,
-		runner:  runner,
-		audit:   log,
-		global:  make(chan struct{}, cfg.Limits.MaxConcurrentGlobal),
+		entries:  make(map[string]*Entry, len(cfg.Repositories)),
+		limits:   cfg.Limits,
+		runner:   runner,
+		audit:    log,
+		global:   make(chan struct{}, cfg.Limits.MaxConcurrentGlobal),
+		metadata: newMetadataCoalescer(cfg.Limits.MetadataCacheTTL, cfg.Limits.MetadataCacheMaxEntries),
 	}
 	for _, rc := range cfg.Repositories {
 		loc, err := config.ReadRepositoryLocation(rc.RepositoryFile)

@@ -96,6 +96,12 @@ booleans without hidden counts or identifiers. `partial_path_visibility` and the
 per-group flag mark snapshots visible only through an allowlisted intersection;
 their whole-snapshot summaries remain suppressed.
 
+When metadata caching is enabled, `list_snapshots` also returns
+`metadata_cache: {enabled, hit, observed_at, age_seconds, ttl_seconds}`. A cache
+hit adds a warning and never proves current authentication or backend
+reachability. Selection caching for find/browse/statistics is internal; those
+tools still run fresh concrete inspection commands and reapply authorization.
+
 A missing visible snapshot is not evidence that no backup exists. Freshness
 never proves restorability, cryptographic integrity, backup coverage, or a
 successful data verification. Repository connectivity errors remain ordinary
@@ -133,6 +139,7 @@ Output `data`: array of `{id, label?, backend, allowed_hosts, allowed_tags, allo
 | `include_freshness` | bool | opt-in metadata-only latest-per-group summary |
 | `expected_cadence` | string | optional Go duration (1m to 87600h) for overdue judgment |
 | `freshness_group_by` | string | `host` (default) or `host_tag` |
+| `metadata_cache` | object | present when caching is enabled; includes hit, observation time, age, and TTL |
 
 Output: `{snapshots, count, total, offset, limit, next_cursor?}` sorted newest first (UTC).
 `truncated` is true when more results exist beyond the current offset/limit page.

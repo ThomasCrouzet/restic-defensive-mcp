@@ -90,6 +90,17 @@ server normalizes them to UTC and filters snapshots before invoking `find` or
 `stats`. They are not translated into restic's file-time `--oldest`/`--newest`
 find flags.
 
+## Metadata coalescing and cache
+
+Identical in-flight snapshot-metadata commands are coalesced, so concurrent
+callers share one approved `snapshots` invocation without changing the capacity
+policy for distinct commands. An optional in-memory cache is disabled by default;
+when enabled it is short-lived (`1s` to `5m`), entry-bounded, keyed by repository
+and normalized selectors, and reports hit status, observation time, age, and TTL.
+Password rotation and removed snapshots are observed only after expiry. A cache
+hit does not prove current authentication or backend reachability. Content tools
+still execute fresh `ls`, `find`, or `stats` commands and reapply policy.
+
 ## Continuation cursors
 
 `list_snapshots`, `browse_snapshot`, and `find_files` can return an opaque
