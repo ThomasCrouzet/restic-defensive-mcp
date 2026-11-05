@@ -57,6 +57,15 @@ The server rejects excess commands immediately when a concurrency limit is full.
 It does not keep an unbounded command queue.
 Clients can retry `resource_busy` errors with a delay and a limited retry count.
 
+## Time selectors
+
+`after` and `before` filter snapshot creation time (`Snapshot.Time`), not file
+modification time. They accept RFC 3339 timestamps with an explicit offset,
+normalize to UTC, and use the half-open interval `[after, before)`. Reversed,
+equal, or malformed bounds return `invalid_argument` before any restic command.
+A window narrows an oversized `find_files` or `repository_stats` selection; it
+never changes statistics modes or aggregates independent batches.
+
 ## Tools
 
 ### `restic_capabilities`
@@ -83,6 +92,8 @@ Output `data`: array of `{id, label?, backend, allowed_hosts, allowed_tags, allo
 | `path` | string | absolute, allowlisted; selects snapshots whose roots overlap it in either direction |
 | `limit` | int | capped by config |
 | `offset` | int | legacy pagination offset |
+| `after` | string | optional RFC 3339 inclusive lower bound on snapshot creation time |
+| `before` | string | optional RFC 3339 exclusive upper bound on snapshot creation time |
 | `cursor` | string | opaque continuation; carries the original filters |
 
 Output: `{snapshots, count, total, offset, limit, next_cursor?}` sorted newest first (UTC).
@@ -103,6 +114,7 @@ root, the whole-snapshot backup `summary` is omitted to avoid aggregate leakage.
 | `repository_id` | string | required |
 | `snapshot_id` | string | full id, hex prefix ≥8, or `latest` |
 | `host`/`tags`/`path` | | required disambiguators for `latest` in multi-snapshot repos |
+| `after`/`before` | string | optional snapshot-creation window, `[after, before)` |
 
 Full 64-hex snapshot ids are resolved with a targeted metadata query. Shorter
 hex prefixes are matched server-side so `ambiguous_snapshot` is preserved.
@@ -118,6 +130,7 @@ Invisible snapshots are reported as `snapshot_not_found`.
 | `recursive` | bool | default false |
 | `limit` | int | capped by `max_nodes` |
 | `host` | string | optional policy-checked filter |
+| `after`/`before` | string | optional snapshot-creation window, `[after, before)` |
 | `cursor` | string | opaque continuation; carries the original scope |
 
 Output nodes: `name`, `type`, `path`, `size?`, `permissions?`, `mtime?`.
@@ -143,6 +156,7 @@ ls`; this is continuation, not backend pagination.
 | `host`/`tags` | | policy checked |
 | `limit` | int | page size, capped by `max_find_results` |
 | `ignore_case` | bool | |
+| `after`/`before` | string | optional snapshot-creation window, `[after, before)`; not file modification time |
 | `cursor` | string | opaque continuation; carries the original filters |
 
 Output: `{groups, count, total?, incomplete, next_cursor?}` where `count` is the
@@ -174,6 +188,7 @@ locally enforced scope.
 | `mode` | string | `restore-size` (default), `files-by-contents`, `raw-data`, `blobs-per-file` |
 | `snapshot_id` | string | optional |
 | `host`/`tags`/`path` | | snapshot selectors; `path` is not a subtree statistics scope |
+| `after`/`before` | string | optional snapshot-creation window, `[after, before)` |
 
 Output includes `selected_snapshots`, `excluded_snapshots`, and `notes`.
 Statistics cover entire selected snapshots and are not a full integrity check.

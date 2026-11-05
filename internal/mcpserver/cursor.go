@@ -25,6 +25,8 @@ type cursorState struct {
 	Host        string
 	Tags        []string
 	Path        string
+	After       string
+	Before      string
 	Pattern     string
 	IgnoreCase  bool
 	Recursive   bool
