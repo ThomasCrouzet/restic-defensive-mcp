@@ -9,6 +9,7 @@ Structurally read-only inspection:
 - Local / S3 / B2 / REST backends
 - Bounds, redaction, audit, cost classes
 - Executable stdio tests with real restic and temporary repositories
+- Mixed and nested visibility-policy scenarios, including statistics restrictions
 - Local protocol evidence and real-child cancellation checks
 - Releases with platform archives, checksums, and license notices
 

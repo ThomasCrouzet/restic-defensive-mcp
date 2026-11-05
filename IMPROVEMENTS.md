@@ -2,14 +2,18 @@
 
 These items preserve the inspection-only contract in [SECURITY.md](SECURITY.md).
 
-## P2: Extend executable policy scenarios
+## Completed: Extend executable policy scenarios ([#15](https://github.com/ThomasCrouzet/restic-defensive-mcp/issues/15))
 
-- Component: `internal/mcpserver/server.go`, `internal/policy/paths.go`.
+- Component: `internal/testrepo`, executable stdio scenarios.
 - Benefit: demonstrate useful results under mixed visible and hidden snapshot roots.
-- Completion: executable protocol scenarios cover nested allowlists and whole-snapshot statistics restrictions.
-  Retained JSON results show which metadata remains visible.
-- Existing evidence: executable tests cover pagination, empty matches, and path denial.
-  Isolated policy tests cover mixed roots and ambiguous snapshot prefixes.
+- Completion: `TestExecutableMixedVisibilityPolicies` covers mixed visible/hidden
+  roots, a snapshot root broader than the allowlist, an allowlisted parent
+  broader than a backed-up child, nested and overlapping allowlists, `/`,
+  disjoint roots, hidden hosts and tags, scoped `latest`, and whole-snapshot
+  statistics restrictions. Assertions inspect public responses and errors.
+- Evidence: executable tests also cover pagination, empty matches, and path
+  denial. Isolated policy tests retain mixed roots and ambiguous snapshot
+  prefixes that executable fixtures cannot make deterministic.
 
 ## P2: Exercise native Windows behavior
 
