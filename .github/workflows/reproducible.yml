@@ -1,0 +1,80 @@
+name: reproducible
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/reproducible.yml'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'scripts/build_release.py'
+      - 'scripts/verify_reproducible_builds.py'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Version embedded in the archives (a leading v is stripped)
+        required: false
+        default: '0.0.0'
+        type: string
+      source_revision:
+        description: Git revision to build twice; defaults to the workflow commit
+        required: false
+        default: ''
+        type: string
+      source_date_epoch:
+        description: Source timestamp; defaults to the revision commit time
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reproducible-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27.3'
+  GOMAXPROCS: '2'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: build twice and compare
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_REVISION: ${{ inputs.source_revision }}
+          REQUESTED_EPOCH: ${{ inputs.source_date_epoch }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED_VERSION:-0.0.0}"
+          version="${version#v}"
+          revision="${REQUESTED_REVISION:-${GITHUB_SHA}}"
+          epoch="${REQUESTED_EPOCH:-$(git show -s --format=%ct "$revision")}"
+          echo "source_revision=$(git rev-parse "$revision")"
+          echo "version=${version}"
+          echo "source_date_epoch=${epoch}"
+          echo "go_version=${GO_VERSION}"
+          echo "job_timeout_minutes=20"
+          python3 scripts/verify_reproducible_builds.py \
+            --revision "$revision" \
+            --version "$version" \
+            --source-date-epoch "$epoch"

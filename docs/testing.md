@@ -16,6 +16,14 @@ make build
 Run `make fuzz-smoke` after parser, path policy, or redaction changes.
 The race detector requires a compatible C compiler and CGO support.
 
+## Reproducible packaging
+
+`scripts/verify_reproducible_builds.py` builds one revision twice in detached
+worktrees with separate Go build caches and compares all four platform archives
+plus `SHA256SUMS`. The dedicated workflow runs it for packaging changes and the
+release workflow gates publication on it. See [Releasing](releasing.md) for the
+controlled toolchain envelope and local command.
+
 ## Fuzzing
 
 Normal tests always run each fuzz target's deterministic seed corpus. Pull-request

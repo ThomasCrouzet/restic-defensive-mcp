@@ -13,6 +13,44 @@ Restic is a separate dependency. The release does not contain a restic binary.
 The build injects the release tag's version into `--version` and MCP capabilities.
 Each archive includes license texts and third-party notices.
 
+## Reproducibility gate
+
+The release workflow calls `.github/workflows/reproducible.yml` before publishing.
+That job builds the same commit twice in two detached worktrees with different
+absolute checkout paths and separate Go build caches. It then compares every
+platform archive and `SHA256SUMS` byte for byte. Any mismatch fails the job and
+names the affected artifact, so publication does not start.
+
+The comparison job also runs on pull requests that change packaging scripts,
+Go module inputs, the command or internal packages, or the release workflows.
+It runs the existing extracted-binary validation separately; identical bytes do
+not prove that the executable runs correctly.
+
+The controlled envelope is recorded in the job log and in local output:
+
+- Source revision and `SOURCE_DATE_EPOCH` from the commit time.
+- Go toolchain version, `go.sum` digest, and fixed build flags
+  (`-buildvcs=true`, `-trimpath`, `-s -w`, `CGO_ENABLED=0`, version injection).
+- Python version and compile/runtime zlib versions used by the archive writer.
+- Separate build caches and different absolute checkout paths.
+
+Reproduce locally:
+
+```bash
+revision="$(git rev-parse HEAD)"
+epoch="$(git show -s --format=%ct "$revision")"
+python3 scripts/verify_reproducible_builds.py \
+  --revision "$revision" \
+  --version 0.0.0 \
+  --source-date-epoch "$epoch"
+```
+
+Byte identity is promised only inside this envelope. A different Go patch
+release, module contents, Python/zlib build, compression implementation, or
+build host is outside the comparison. Signature or attestation metadata added
+later must stay outside the byte-for-byte artifact comparison. Keep logs and
+diagnostic output local; no reproducibility report or trace is uploaded.
+
 ## Prepare the release
 
 1. Update `CHANGELOG.md` with the release version and date.

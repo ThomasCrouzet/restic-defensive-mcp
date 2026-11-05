@@ -12,6 +12,10 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Verify release archives by building the same revision twice with separate
+  worktrees and build caches, then comparing every archive and `SHA256SUMS`
+  byte for byte before publication.
+
 - Add a separate weekly bounded fuzz exploration workflow with per-target and
   whole-job budgets while keeping deterministic seeds in normal CI.
 

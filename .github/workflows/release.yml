@@ -10,7 +10,13 @@ env:
   RESTIC_VERSION: '0.19.1'
 
 jobs:
+  reproducible:
+    uses: ./.github/workflows/reproducible.yml
+    with:
+      version: ${{ github.ref_name }}
+
   publish:
+    needs: [reproducible]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
