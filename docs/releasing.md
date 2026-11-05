@@ -59,6 +59,50 @@ output, and runs the executable stdio and cancellation suites against the
 extracted binary. Combined with the reproducibility gate, it exercises the
 deliverable intended for publication rather than a Linux cross-build alone.
 
+## Release authenticity
+
+Releases use GitHub Artifact Attestations (build provenance) issued through
+GitHub OIDC. The trusted identity is this repository and the publication
+workflow at `ThomasCrouzet/restic-defensive-mcp/.github/workflows/release.yml`
+on a `refs/tags/v*` ref. No long-lived signing key or repository secret is used.
+The workflow's short-lived OIDC token cannot be reused outside the job.
+
+The release job attests the four archives and `SHA256SUMS` after the CI gates,
+reproducibility comparison, and extracted Linux executable validation pass, and
+before `gh release create`. If attestation fails, publication does not start.
+Attestations are GitHub-side verification metadata, not release assets. The
+release deliverable policy remains archives, `SHA256SUMS`, license texts, and
+notices only; test reports, traces, and SARIF are still excluded.
+
+Verify a downloaded archive and the checksum manifest:
+
+```bash
+tag=v0.2.0
+repo=ThomasCrouzet/restic-defensive-mcp
+gh attestation verify "restic-defensive-mcp_${tag#v}_linux_amd64.tar.gz" \
+  --repo "$repo" \
+  --signer-workflow "$repo/.github/workflows/release.yml" \
+  --source-ref "refs/tags/$tag"
+gh attestation verify SHA256SUMS \
+  --repo "$repo" \
+  --signer-workflow "$repo/.github/workflows/release.yml" \
+  --source-ref "refs/tags/$tag"
+sha256sum -c SHA256SUMS
+```
+
+Verification fails for a modified archive or checksum file, a missing
+attestation, or an unexpected repository/workflow/tag identity. It establishes
+that GitHub observed the release workflow produce these exact digests for that
+tag. It does not prove reproducibility, build correctness, absence of workflow
+compromise, or successful runtime behavior; use the deterministic rebuild and
+the extracted-binary validation as separate evidence.
+
+Signing material never enters source, logs, or release assets. The publication
+job receives only `contents: write` (release creation), `id-token: write`
+(short-lived OIDC), and `attestations: write` (attestation storage); all other
+jobs keep read-only permissions. Existing tag/source checks, CI gates, runtime
+validation, and non-replacement checks remain enforced.
+
 ## Prepare the release
 
 1. Update `CHANGELOG.md` with the release version and date.

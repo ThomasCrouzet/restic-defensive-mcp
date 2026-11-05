@@ -88,9 +88,28 @@ Archives are available for Linux amd64/arm64, macOS arm64, and Windows amd64.
 
 Compare the archive's SHA-256 checksum with its entry in `SHA256SUMS`, using
 `sha256sum` on Linux, `shasum -a 256` on macOS, or
-`Get-FileHash -Algorithm SHA256` on Windows. Extract the archive, give the binary
-execute permission with `chmod +x` on Linux/macOS if needed, and run it with
-`--version` before configuration.
+`Get-FileHash -Algorithm SHA256` on Windows. If you use the GitHub CLI, verify
+the release attestation for the archive and checksum file:
+
+```sh
+tag=v0.2.0
+repo=ThomasCrouzet/restic-defensive-mcp
+gh attestation verify "restic-defensive-mcp_${tag#v}_linux_amd64.tar.gz" \
+  --repo "$repo" \
+  --signer-workflow "$repo/.github/workflows/release.yml" \
+  --source-ref "refs/tags/$tag"
+gh attestation verify SHA256SUMS \
+  --repo "$repo" \
+  --signer-workflow "$repo/.github/workflows/release.yml" \
+  --source-ref "refs/tags/$tag"
+```
+
+Attestation verification establishes the repository/workflow/tag identity and
+the exact artifact digest; checksums detect corruption. Neither proves
+reproducibility or successful execution. See
+[Releasing](docs/releasing.md#release-authenticity) for limits. Extract the
+archive, give the binary execute permission with `chmod +x` on Linux/macOS if
+needed, and run it with `--version` before configuration.
 
 ### Install (from source)
 
