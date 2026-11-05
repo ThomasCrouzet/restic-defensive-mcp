@@ -74,6 +74,17 @@ snapshots while a child scope still selects its concrete snapshot. When a
 repository exposes multiple allowed roots, the caller must choose one
 explicitly.
 
+## Continuation cursors
+
+`list_snapshots`, `browse_snapshot`, and `find_files` can return an opaque
+`next_cursor`. Cursors are bounded in-memory state, expire after five minutes,
+are single-use, and bind the repository, original filters, and sealed policy.
+Browsing and searching re-run the approved inspection command for each page;
+restic has no backend pagination for these formats. Hidden entries are filtered
+before advancing the visible page offset. A removed snapshot produces
+`stale_selection`; a malformed, reused, expired, or mismatched cursor produces
+`cursor_invalid`. Restarting the server invalidates outstanding cursors.
+
 ## Process lifecycle (timeouts)
 
 - **Unix:** restic is started in its own process group (`Setpgid`). Caller

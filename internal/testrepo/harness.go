@@ -311,6 +311,12 @@ func (f *Fixture) AddSnapshot(ctx context.Context, host string, tags []string, p
 	return f.run(ctx, args...)
 }
 
+// ForgetSnapshot removes one snapshot for pagination and stale-selection tests.
+// This remains test-only; production never builds the forget command.
+func (f *Fixture) ForgetSnapshot(ctx context.Context, snapshotID string) error {
+	return f.run(ctx, "forget", snapshotID)
+}
+
 // SetRepositoryLocation replaces the repository location source file.
 func (f *Fixture) SetRepositoryLocation(location string) error {
 	return os.WriteFile(f.RepositoryFile, []byte(location+"\n"), 0o600)

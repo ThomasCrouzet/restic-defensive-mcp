@@ -29,6 +29,10 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Add bounded, single-use continuation cursors for snapshot listing, directory
+  browsing, and file searches. Hidden entries are filtered before paging, and
+  removed snapshot selections fail with `stale_selection`.
+
 - Structurally read-only stdio MCP server with seven inspection tools.
 - Sealed YAML repository registry with host, tag, and path policies.
 - Local, S3, B2, and REST backend support; SFTP and rclone are rejected.
