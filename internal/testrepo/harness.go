@@ -311,6 +311,20 @@ func (f *Fixture) AddSnapshot(ctx context.Context, host string, tags []string, p
 	return f.run(ctx, args...)
 }
 
+// AddSnapshotAt creates one additional backup with an explicit snapshot time.
+// This remains test-only; production never builds the backup command.
+func (f *Fixture) AddSnapshotAt(ctx context.Context, host string, tags []string, timestamp time.Time, paths ...string) error {
+	args := []string{"backup", "--time", timestamp.UTC().Format("2006-01-02 15:04:05")}
+	if host != "" {
+		args = append(args, "--host", host)
+	}
+	for _, tag := range tags {
+		args = append(args, "--tag", tag)
+	}
+	args = append(args, paths...)
+	return f.run(ctx, args...)
+}
+
 // ForgetSnapshot removes one snapshot for pagination and stale-selection tests.
 // This remains test-only; production never builds the forget command.
 func (f *Fixture) ForgetSnapshot(ctx context.Context, snapshotID string) error {

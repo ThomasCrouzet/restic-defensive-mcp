@@ -61,6 +61,47 @@ type listSnapshotsData struct {
 	Limit      int               `json:"limit"`
 	Window     windowData        `json:"window"`
 	NextCursor string            `json:"next_cursor,omitempty"`
+	Freshness  *freshnessData    `json:"freshness,omitempty"`
+}
+
+type freshnessData struct {
+	ObservedAt            string               `json:"observed_at"`
+	Status                string               `json:"status" jsonschema:"one of no_visible_snapshots, recency_only, within_cadence, overdue, incomplete"`
+	GroupBy               string               `json:"group_by" jsonschema:"host or host_tag"`
+	ExpectedCadence       string               `json:"expected_cadence,omitempty"`
+	Scope                 freshnessScope       `json:"scope"`
+	Groups                []freshnessGroup     `json:"groups"`
+	NoVisibleSnapshots    bool                 `json:"no_visible_snapshots"`
+	PartialPathVisibility bool                 `json:"partial_path_visibility"`
+	Incomplete            bool                 `json:"incomplete"`
+	HiddenScope           freshnessHiddenScope `json:"hidden_scope"`
+	Notes                 []string             `json:"notes"`
+}
+
+type freshnessScope struct {
+	Hosts  []string   `json:"hosts"`
+	Tags   []string   `json:"tags"`
+	Paths  []string   `json:"paths"`
+	Window windowData `json:"window"`
+}
+
+type freshnessGroup struct {
+	Key                   string   `json:"key"`
+	Hostname              string   `json:"hostname,omitempty"`
+	Tags                  []string `json:"tags,omitempty"`
+	LatestSnapshotID      string   `json:"latest_snapshot_id"`
+	LatestSnapshotTime    string   `json:"latest_snapshot_time"`
+	AgeSeconds            int64    `json:"age_seconds"`
+	ExpectedCadence       string   `json:"expected_cadence,omitempty"`
+	Overdue               *bool    `json:"overdue"`
+	PartialPathVisibility bool     `json:"partial_path_visibility"`
+	VisibleSnapshotCount  int      `json:"visible_snapshot_count"`
+}
+
+type freshnessHiddenScope struct {
+	Hosts bool `json:"hosts"`
+	Tags  bool `json:"tags"`
+	Paths bool `json:"paths"`
 }
 
 type browseData struct {
@@ -202,15 +243,18 @@ type emptyIn struct{}
 type listReposIn struct{}
 
 type listSnapshotsIn struct {
-	RepositoryID string   `json:"repository_id" jsonschema:"preconfigured repository id"`
-	Host         string   `json:"host,omitempty" jsonschema:"optional host filter (must be allowlisted)"`
-	Tags         []string `json:"tags,omitempty" jsonschema:"optional tags (each must be allowlisted)"`
-	Path         string   `json:"path,omitempty" jsonschema:"optional path filter (must be allowlisted)"`
-	Limit        int      `json:"limit,omitempty" jsonschema:"max snapshots to return"`
-	Offset       int      `json:"offset,omitempty" jsonschema:"pagination offset"`
-	After        string   `json:"after,omitempty" jsonschema:"optional RFC 3339 inclusive lower bound on snapshot creation time"`
-	Before       string   `json:"before,omitempty" jsonschema:"optional RFC 3339 exclusive upper bound on snapshot creation time"`
-	Cursor       string   `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
+	RepositoryID     string   `json:"repository_id" jsonschema:"preconfigured repository id"`
+	Host             string   `json:"host,omitempty" jsonschema:"optional host filter (must be allowlisted)"`
+	Tags             []string `json:"tags,omitempty" jsonschema:"optional tags (each must be allowlisted)"`
+	Path             string   `json:"path,omitempty" jsonschema:"optional path filter (must be allowlisted)"`
+	Limit            int      `json:"limit,omitempty" jsonschema:"max snapshots to return"`
+	Offset           int      `json:"offset,omitempty" jsonschema:"pagination offset"`
+	After            string   `json:"after,omitempty" jsonschema:"optional RFC 3339 inclusive lower bound on snapshot creation time"`
+	Before           string   `json:"before,omitempty" jsonschema:"optional RFC 3339 exclusive upper bound on snapshot creation time"`
+	Cursor           string   `json:"cursor,omitempty" jsonschema:"opaque continuation cursor; pass only repository_id, cursor, and optionally limit"`
+	IncludeFreshness bool     `json:"include_freshness,omitempty" jsonschema:"include a metadata-only latest-per-group freshness summary"`
+	ExpectedCadence  string   `json:"expected_cadence,omitempty" jsonschema:"optional Go duration for the expected backup cadence"`
+	FreshnessGroupBy string   `json:"freshness_group_by,omitempty" jsonschema:"host (default) or host_tag"`
 }
 
 type getSnapshotIn struct {

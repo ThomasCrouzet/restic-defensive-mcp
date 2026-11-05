@@ -77,6 +77,20 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 		if err != nil {
 			return failTool(deps, tool, in.RepositoryID, err)
 		}
+		groupBy, err := validateFreshnessGroupBy(in.FreshnessGroupBy)
+		if err != nil {
+			return failTool(deps, tool, in.RepositoryID, err)
+		}
+		cadence, err := parseExpectedCadence(in.ExpectedCadence)
+		if err != nil {
+			return failTool(deps, tool, in.RepositoryID, err)
+		}
+		if in.Cursor != "" && in.IncludeFreshness {
+			return failTool(deps, tool, in.RepositoryID, apperr.New(
+				apperr.InvalidArgument,
+				"include_freshness is computed from the first-page selection and cannot be combined with a cursor",
+			))
+		}
 
 		if in.Cursor != "" {
 			if in.Offset != 0 || in.Host != "" || len(in.Tags) > 0 || in.Path != "" ||
@@ -179,10 +193,12 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 		}
 		// Server-side visibility filter (single policy implementation).
 		filtered := make([]restic.Snapshot, 0, len(snaps))
+		partialByID := make(map[string]bool, len(snaps))
 		for _, s := range snaps {
 			if !window.contains(s.Time) || !policyVisible(e, s) || !matchesSnapshotFilters(s, in.Host, in.Tags, requestedPath) {
 				continue
 			}
+			partialByID[s.ID] = !statsSnapshotAllowed(e, s)
 			filtered = append(filtered, publicSnapshot(e, s))
 		}
 		total := len(filtered)
@@ -204,6 +220,25 @@ func makeListSnapshots(deps Deps) func(context.Context, *mcp.CallToolRequest, li
 			"offset":    start,
 			"limit":     limit,
 			"window":    windowOutput(state.After, state.Before),
+		}
+		if in.IncludeFreshness {
+			scope := freshnessScope{
+				Hosts:  append([]string(nil), e.Hosts.Allowed...),
+				Tags:   append([]string(nil), e.Tags.Allowed...),
+				Paths:  append([]string(nil), e.Paths.Allowed...),
+				Window: windowOutput(state.After, state.Before),
+			}
+			if state.Host != "" {
+				scope.Hosts = []string{state.Host}
+			}
+			if len(state.Tags) > 0 {
+				scope.Tags = append([]string(nil), state.Tags...)
+			}
+			if state.Path != "" {
+				scope.Paths = []string{state.Path}
+			}
+			freshness := buildFreshness(e, filtered, partialByID, scope, groupBy, cadence, false)
+			out["freshness"] = freshness
 		}
 		if truncated && len(page) > 0 {
 			next, cursorErr := deps.cursors.issue(cursorState{

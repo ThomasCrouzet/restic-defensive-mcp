@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Add an opt-in metadata-only freshness summary to `list_snapshots`, with
+  explicit observation time, visible scope, hidden-scope flags, cadence
+  judgment, and partial-visibility reporting.
+
 - Publish typed output schemas for all seven tools, return matching structured
   content alongside the text compatibility envelope, and split the MCP server
   into registration, contract, selection, and handler components.
