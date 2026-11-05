@@ -12,6 +12,9 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Add native macOS arm64 runtime validation for the executable stdio and
+  cancellation suites, including release-archive validation.
+
 - Verify release archives by building the same revision twice with separate
   worktrees and build caches, then comparing every archive and `SHA256SUMS`
   byte for byte before publication.

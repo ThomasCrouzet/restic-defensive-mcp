@@ -16,6 +16,16 @@ make build
 Run `make fuzz-smoke` after parser, path policy, or redaction changes.
 The race detector requires a compatible C compiler and CGO support.
 
+## Native macOS
+
+`.github/workflows/native-macos.yml` runs on an arm64 `macos-14` runner for
+changes to startup, process handling, configuration, packaging, or the executable
+suite. It verifies the runner and binary architecture, installs restic 0.19.1,
+runs the stdio end-to-end suite, and exercises cancellation with real repository
+lock cleanup. During a release it builds the intended macOS archive and tests the
+extracted binary. It does not duplicate the Linux restic-version matrix. Evidence
+stays in the runner temp directory and is not uploaded.
+
 ## Reproducible packaging
 
 `scripts/verify_reproducible_builds.py` builds one revision twice in detached

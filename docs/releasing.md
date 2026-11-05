@@ -51,6 +51,14 @@ build host is outside the comparison. Signature or attestation metadata added
 later must stay outside the byte-for-byte artifact comparison. Keep logs and
 diagnostic output local; no reproducibility report or trace is uploaded.
 
+## Native release validation
+
+The release workflow calls the native macOS job before publication. That job
+builds the macOS archive at the release revision, verifies its `--version`
+output, and runs the executable stdio and cancellation suites against the
+extracted binary. Combined with the reproducibility gate, it exercises the
+deliverable intended for publication rather than a Linux cross-build alone.
+
 ## Prepare the release
 
 1. Update `CHANGELOG.md` with the release version and date.
