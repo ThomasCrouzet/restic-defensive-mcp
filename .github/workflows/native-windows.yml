@@ -1,0 +1,116 @@
+name: native-windows
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-windows.yml'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'integration*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27.3'
+  RESTIC_VERSION: '0.19.1'
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: install restic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asset = "restic_${env:RESTIC_VERSION}_windows_amd64.zip"
+          $base = "https://github.com/restic/restic/releases/download/v${env:RESTIC_VERSION}"
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          $sums = Join-Path $env:RUNNER_TEMP 'restic-SHA256SUMS'
+          Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile $archive
+          Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile $sums
+          $line = (Get-Content $sums | Where-Object { $_ -match "\s+$([regex]::Escape($asset))$" } | Select-Object -First 1)
+          if (-not $line) { throw "no checksum for $asset" }
+          $expected = ($line -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "restic checksum mismatch" }
+          $resticDir = Join-Path $env:RUNNER_TEMP 'restic-native'
+          Expand-Archive -Path $archive -DestinationPath $resticDir -Force
+          $restic = Get-ChildItem $resticDir -Filter '*.exe' | Select-Object -First 1
+          if (-not $restic) { throw "restic executable missing from archive" }
+          $resticExe = Join-Path $resticDir 'restic.exe'
+          Copy-Item $restic.FullName $resticExe -Force
+          & $resticExe version
+          "RESTIC_BINARY=$resticExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: build native executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binDir = Join-Path $env:RUNNER_TEMP 'restic mcp native'
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+          $binary = Join-Path $binDir 'restic-defensive-mcp.exe'
+          $env:CGO_ENABLED = '0'
+          go build -trimpath -ldflags '-X main.version=native-e2e' -o $binary ./cmd/restic-defensive-mcp
+          if (-not (Test-Path $binary)) { throw "native executable missing" }
+          & $binary --version
+          "RESTIC_MCP_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: record native environment
+        shell: pwsh
+        run: |
+          "source_revision=${env:GITHUB_SHA}"
+          "os=$([System.Environment]::OSVersion.VersionString)"
+          "arch=${env:PROCESSOR_ARCHITECTURE}"
+          "go_version=$(go version)"
+          "restic_version=$(& $env:RESTIC_BINARY version)"
+          "server_version=$(& $env:RESTIC_MCP_BINARY --version)"
+
+      - name: probe stdin snapshot paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probe = Join-Path $env:RUNNER_TEMP 'stdin-probe'
+          New-Item -ItemType Directory -Force -Path $probe,(Join-Path $probe 'cache') | Out-Null
+          $password = Join-Path $probe 'password'
+          Set-Content -NoNewline -Path $password -Value 'probe-password'
+          $env:RESTIC_REPOSITORY = Join-Path $probe 'repo'
+          $env:RESTIC_PASSWORD_FILE = $password
+          $env:RESTIC_CACHE_DIR = Join-Path $probe 'cache'
+          $env:HOME = $probe
+          & $env:RESTIC_BINARY init
+          'hello world' | & $env:RESTIC_BINARY backup --stdin --stdin-filename hello.txt --host testhost --tag test
+          & $env:RESTIC_BINARY snapshots --json
+          $id = (& $env:RESTIC_BINARY snapshots --json | ConvertFrom-Json)[0].id
+          & $env:RESTIC_BINARY ls --json $id /
+
+      - name: native executable stdio and ACL suite
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDir = Join-Path $env:RUNNER_TEMP 'restic-defensive-mcp-windows-e2e'
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          $env:PATH = "$(Split-Path $env:RESTIC_BINARY);$env:PATH"
+          $env:GOMAXPROCS = '2'
+          $env:GOFLAGS = '-p=1'
+          $env:RESTIC_MCP_ARTIFACT_DIR = $artifactDir
+          go test -tags=integration -run '^(TestExecutableStdinFixture|TestWindowsPrivateFixtureACL)$' -count=1 -timeout 8m -v .

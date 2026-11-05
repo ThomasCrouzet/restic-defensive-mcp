@@ -15,12 +15,16 @@ These items preserve the inspection-only contract in [SECURITY.md](SECURITY.md).
   denial. Isolated policy tests retain mixed roots and ambiguous snapshot
   prefixes that executable fixtures cannot make deterministic.
 
-## P2: Exercise native Windows behavior
+## Completed: Exercise native Windows behavior ([#20](https://github.com/ThomasCrouzet/restic-defensive-mcp/issues/20))
 
 - Component: secret-file handling, process cancellation, and executable integration.
 - Benefit: detect runtime differences that cross-compilation cannot find.
-- Completion: a Windows runner executes the stdio suite and records local results.
-  Its fixture uses private NTFS ACLs and confirms direct-process cancellation.
+- Completion: `native-windows.yml` runs a Windows runner with a checksum-verified
+  restic, a POSIX-path stdin fixture, spaces in executable/config paths, and an
+  `icacls` private-ACL check. Drive-root snapshot paths are canonicalized to
+  POSIX form; UNC and drive-relative forms remain explicitly unsupported.
+  Cancellation still kills the direct restic process only and may leave a lock;
+  that platform limit is documented.
 
 ## P2: Exercise remote backend deployment boundaries
 

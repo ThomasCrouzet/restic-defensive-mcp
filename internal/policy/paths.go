@@ -37,6 +37,12 @@ func CleanPath(p string) (string, error) {
 	if strings.Contains(p, "\\") || strings.IndexFunc(p, unicode.IsControl) >= 0 {
 		return "", apperr.New(apperr.InvalidArgument, "path contains illegal characters")
 	}
+	if strings.HasPrefix(p, "//") {
+		return "", apperr.New(apperr.InvalidArgument, "UNC paths are unsupported; snapshot paths must use POSIX form")
+	}
+	if len(p) >= 2 && p[1] == ':' {
+		return "", apperr.New(apperr.InvalidArgument, "Windows drive paths are unsupported; snapshot paths must use POSIX form")
+	}
 	if !strings.HasPrefix(p, "/") {
 		return "", apperr.New(apperr.InvalidArgument, "path must be absolute")
 	}
@@ -53,6 +59,33 @@ func CleanPath(p string) (string, error) {
 		return "", apperr.New(apperr.InvalidArgument, "path must remain absolute after cleaning")
 	}
 	return cleaned, nil
+}
+
+// CleanSnapshotPath canonicalizes a snapshot root path reported by restic.
+// Windows drive paths are converted to the POSIX form restic uses for tree
+// nodes by replacing separators and dropping the volume. UNC paths stay
+// rejected because their authority/share mapping is ambiguous.
+func CleanSnapshotPath(p string) (string, error) {
+	if p == "" {
+		return "", apperr.New(apperr.InvalidArgument, "path must not be empty")
+	}
+	if strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, "//") {
+		return "", apperr.New(apperr.InvalidArgument, "UNC paths are unsupported; snapshot paths must use POSIX form")
+	}
+	if strings.Contains(p, `\`) || (len(p) >= 2 && p[1] == ':') {
+		p = strings.ReplaceAll(p, `\`, "/")
+		if len(p) >= 2 && p[1] == ':' {
+			switch {
+			case len(p) == 2:
+				p = "/"
+			case p[2] == '/':
+				p = p[2:]
+			default:
+				return "", apperr.New(apperr.InvalidArgument, "Windows drive-relative paths are unsupported")
+			}
+		}
+	}
+	return CleanPath(p)
 }
 
 // IsAllowed reports whether cleaned path is under at least one allowed prefix.

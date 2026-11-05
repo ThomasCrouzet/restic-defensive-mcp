@@ -112,6 +112,24 @@ before advancing the visible page offset. A removed snapshot produces
 `stale_selection`; a malformed, reused, expired, or mismatched cursor produces
 `cursor_invalid`. Restarting the server invalidates outstanding cursors.
 
+## Windows paths and secrets
+
+The server can run natively on Windows. MCP tool paths and allowlists use
+POSIX snapshot form: absolute paths start with `/`. Restic snapshot roots may
+carry a Windows volume (`D:\data`); the parser canonicalizes them by replacing
+separators and dropping the volume to `/data`, which matches the tree paths
+restic reports for nodes. Drive-relative forms (`D:data`) and UNC forms
+(`//server/share`) are rejected as ambiguous. Canonicalization is lexical and
+does not resolve host paths or symlinks. If one snapshot covers multiple volumes
+with colliding relative paths, operators must verify the effective scope.
+`internal/testrepo` uses `restic --stdin` snapshots plus a native Windows runner
+to exercise secret handling, spaces in paths, policy denial, and the seven
+tools.
+
+Secret files must be regular, non-symlink, nonempty, and at most 4 KiB. Windows
+builds cannot inspect NTFS ACLs; the native fixture creates and verifies a
+private ACL with `icacls`, and operators must do the same for real files.
+
 ## Process lifecycle (timeouts)
 
 - **Unix:** restic is started in its own process group (`Setpgid`). Caller
@@ -122,7 +140,9 @@ before advancing the visible page offset. A removed snapshot produces
   `unlock`, so an operator may need restic's documented unlock procedure.
 - **Windows:** restic is started with `CREATE_NEW_PROCESS_GROUP`; cancellation
   kills the direct restic process only (no full job-object tree walk in v0.1).
-  Supported backends do not spawn `ssh`/`rclone` helpers.
+  There is no supported graceful console signal in v0.1, so Windows cancellation
+  may leave an inspection lock behind; normal cleanup must happen outside the
+  server. Supported backends do not spawn `ssh`/`rclone` helpers.
 - Reaching the stdout or stderr byte cap starts the same graceful cleanup; it
   does not keep buffering output.
 - On Unix, cancellation remains active after the group leader exits.

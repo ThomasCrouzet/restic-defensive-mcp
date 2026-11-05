@@ -190,6 +190,35 @@ URLs, credential values, or secret-file locations. On Windows, file-type and siz
 checks run locally, but NTFS ACL enforcement remains the operator's
 responsibility.
 
+### Windows setup
+
+PowerShell equivalent of the configuration steps above. Create private regular
+files, apply NTFS ACLs, and use paths containing spaces only as quoted arguments:
+
+```powershell
+$secretDir = Join-Path $env:APPDATA 'restic-defensive-mcp'
+New-Item -ItemType Directory -Force -Path $secretDir,(Join-Path $secretDir 'cache') | Out-Null
+Set-Content -NoNewline -Path (Join-Path $secretDir 'repository') -Value 'C:\path\to\existing\repository'
+Set-Content -NoNewline -Path (Join-Path $secretDir 'password') -Value 'replace-with-password'
+$me = "$env:USERDOMAIN\$env:USERNAME"
+foreach ($file in 'repository','password') {
+  icacls (Join-Path $secretDir $file) /inheritance:r /grant:r "${me}:F"
+}
+Copy-Item config.example.yaml (Join-Path $secretDir 'config.yaml')
+notepad (Join-Path $secretDir 'config.yaml')
+.\restic-defensive-mcp.exe --config (Join-Path $secretDir 'config.yaml') --validate-config
+```
+
+Set absolute Windows paths in `repository_file`, `password_file`, `cache_dir`,
+and `restic_binary`. The server checks file type and size but does not read NTFS
+ACLs; the `icacls` step is operator-enforced. Snapshot policy and MCP tool paths
+use POSIX form. Restic drive-root snapshot paths are canonicalized by replacing
+separators and dropping the volume (`D:\data` becomes `/data`), matching the
+tree paths restic reports. UNC paths remain rejected. If one snapshot covers
+multiple volumes with colliding relative paths, use explicit allowlists and
+verify the effective scope. See
+[compatibility](docs/restic-compatibility.md).
+
 ### Connect VS Code and inspect snapshots
 
 In your local VS Code workspace, add this entry to `.vscode/mcp.json`, merging

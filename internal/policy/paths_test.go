@@ -111,3 +111,31 @@ func FuzzCleanPath(f *testing.F) {
 		_, _ = CleanPath(p)
 	})
 }
+
+func TestCleanPathRejectsAmbiguousWindowsForms(t *testing.T) {
+	for _, value := range []string{`C:/Windows`, `C:\\Windows`, `//server/share`, `\\\\server\\share`} {
+		if _, err := CleanPath(value); err == nil {
+			t.Fatalf("CleanPath(%q) accepted an unsupported Windows form", value)
+		}
+	}
+}
+
+func TestCleanSnapshotPathCanonicalizesWindowsDriveRoots(t *testing.T) {
+	cases := map[string]string{
+		`D:\hello.txt`:        "/hello.txt",
+		`D:/hello.txt`:        "/hello.txt",
+		`D:\data\subdir`:      "/data/subdir",
+		`/already/posix/path`: "/already/posix/path",
+	}
+	for input, want := range cases {
+		got, err := CleanSnapshotPath(input)
+		if err != nil || got != want {
+			t.Fatalf("CleanSnapshotPath(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+	for _, input := range []string{`//server/share`, `\\server\share`, `D:relative`, `D:\..\secret`} {
+		if _, err := CleanSnapshotPath(input); err == nil {
+			t.Fatalf("CleanSnapshotPath(%q) accepted an ambiguous or traversal form", input)
+		}
+	}
+}
