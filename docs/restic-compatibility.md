@@ -16,7 +16,11 @@ codes:
 
 CI runs the Linux integration suite with **restic 0.17.1** and **restic 0.19.1**.
 The suite starts the real MCP executable and uses a temporary local repository.
-Remote backends require deployment-specific credentials and network checks.
+An opt-in remote suite on restic 0.19.1 runs disposable REST and S3-compatible
+services with synthetic credentials and the same executable boundary.
+Native B2 service validation remains an explicit operator procedure and is not
+required by CI. See [Remote backends](remote-backends.md) for the service
+versions, scenario matrix, safe error mapping, and limitations.
 
 A native **macOS arm64** job validates the executable on `macos-14` with restic
 0.19.1. It records the macOS version, architecture, Go version, and restic

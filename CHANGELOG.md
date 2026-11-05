@@ -26,6 +26,11 @@ All notable changes to this project are documented in this file.
   and document incomplete/budget-exhausted paging semantics in
   `docs/scan-budgets.md`.
 
+- Add an opt-in disposable REST and S3-compatible integration suite that drives
+  the executable over stdio, exercises authentication, TLS, network, timeout,
+  cancellation, and lock failures, and keeps B2 configuration acceptance
+  separate from manual service validation.
+
 - Add `--validate-config` for local configuration diagnostics and `--diagnose`
   for explicitly requested bounded repository connectivity checks. Both support
   human-readable and `--json` output without exposing secrets or backend URLs.

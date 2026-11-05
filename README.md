@@ -344,7 +344,9 @@ The restic child environment is rebuilt from an allowlist, with `HOME=/var/empty
 parent `RESTIC_*` and cloud credentials are not inherited. S3 instance-role
 credentials and anonymous access are unsupported. `AWS_PROFILE` and
 `AWS_SHARED_CREDENTIALS_FILE` are rejected because credential profiles can run
-helpers. Remote-backend connectivity needs deployment-specific validation; see
+helpers. Disposable REST and S3-compatible service checks run in an opt-in CI
+workflow. Native B2 service validation is documented as a separate manual level,
+not as an emulator result; see [remote backends](docs/remote-backends.md) and
 [restic compatibility](docs/restic-compatibility.md).
 
 ### Local effects: cache and locks
@@ -364,6 +366,7 @@ logs go to stderr. Details are in [SECURITY.md](SECURITY.md).
 | [Example configuration](config.example.yaml) | Repository definitions, credentials, and runtime limits |
 | [Restic compatibility](docs/restic-compatibility.md) | Command formats, backend restrictions, locks, and process lifecycle |
 | [Scan and response budgets](docs/scan-budgets.md) | Incremental scan limits, incomplete-page semantics, migration, and baseline |
+| [Remote backends](docs/remote-backends.md) | Disposable REST/S3 validation matrix, B2 claim levels, safe errors, and limitations |
 | [Security policy](SECURITY.md) | Threat model, metadata privacy, and private vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) · [Testing](docs/testing.md) | Development rules, required checks, fixtures, and local artifacts |
 | [Releasing](docs/releasing.md) · [Releases](https://github.com/ThomasCrouzet/restic-defensive-mcp/releases) · [Changelog](CHANGELOG.md) | Publication procedure, downloads, and recorded changes |

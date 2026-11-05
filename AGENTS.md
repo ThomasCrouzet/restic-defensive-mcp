@@ -23,12 +23,14 @@ Proven with `make -n`; cross-checked in `docs/testing.md`. Run from the reposito
 - `make lint` runs golangci-lint v2.15.0 via `go run`; the first run needs network access.
 - `make fuzz-smoke` runs six fuzz targets, five seconds each by default.
 - `make integration` needs a real restic 0.17.1+ binary on `PATH`. It covers in-memory and stdio MCP boundaries against a temporary repository with two backups and no file restore.
+- `make integration-remote` sets `RESTIC_MCP_REMOTE_TESTS=1` and needs Docker plus restic. It starts digest-pinned rest-server 0.14.0 and Versity S3 Gateway v1.10.0 containers, exercises controlled failures, and skips outside CI when Docker is unavailable.
 - `make demo` runs only `TestExecutableStdioEndToEnd`; it needs restic.
 - `GOMAXPROCS=2 go test -p 1 -race -count=1 ./...` is the full local regression check; no restic, no secrets.
 - `./bin/restic-defensive-mcp --version` prints the build version.
 - `./bin/restic-defensive-mcp --config <path>` starts the server; needs a config, restic, and readable secret files.
 
-The integration fixture is local and temporary.
+The integration fixture is temporary. Local repositories are the default; the
+opt-in remote suite uses disposable containers with synthetic credentials.
 
 ## Layout
 
@@ -39,8 +41,8 @@ The integration fixture is local and temporary.
 - `internal/mcpserver/`: the seven MCP tools and the response envelope.
 - `internal/config/`: YAML loading, runtime limits, secret file checks.
 - `internal/audit/` and `internal/redaction/`: stderr audit events and secret scrubbing.
-- `internal/testrepo/`: the only code allowed to run `restic init` or `restic backup`; tests only.
-- `docs/`: tool contract, testing, releasing, restic compatibility.
+- `internal/testrepo/`: the only code allowed to run `restic init`, `backup`, or a lock-holding `check`; also disposable REST/S3 services and failure proxies; tests only.
+- `docs/`: tool contract, testing, releasing, restic compatibility, remote backends.
 - Generated: `bin/` and `dist/` are gitignored; do not edit or commit them.
 
 ## Invariants
@@ -68,6 +70,7 @@ The integration fixture is local and temporary.
 ## Pitfalls
 
 - `make integration` fails on a missing binary: the suite runs real restic. Install 0.17.1+ or set `restic_binary`; `make test` alone does not need restic.
+- `make integration-remote` skips outside CI without Docker or the pinned images: it starts disposable containers. In CI the remote job fails instead of skipping.
 - Boot exits 2 with `unsupported_restic_version`: the version probe found an older restic; upgrade before debugging anything else.
 - Boot exits 2 with secret file errors: the file is a symlink, not regular, empty, oversized, or group/world readable. Use a plain 0600 file.
 - `empty_allowlist` warning at boot: an empty list means no restriction for that dimension. Set explicit hosts, tags, and paths.
