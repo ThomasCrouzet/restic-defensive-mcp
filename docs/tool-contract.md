@@ -80,6 +80,27 @@ envelope. Policy, window, cursor, repository, and restic failures keep the
 documented handler envelope and error codes. Optional result fields such as
 `total` and `next_cursor` are explicitly absent rather than guessed.
 
+## Freshness summary
+
+`list_snapshots` can return an opt-in `freshness` object. It uses only the
+snapshot metadata already authorized for that request; it adds no backend probe
+and does not change `list_repositories` or `restic_capabilities`.
+
+The summary includes the observation time, effective host/tag/path scope,
+requested window, group-by mode, and the latest visible snapshot per group with
+its timestamp, age, visible count, and optional expected cadence. `status` is one
+of `no_visible_snapshots`, `recency_only`, `within_cadence`, `overdue`, or
+`incomplete`. `overdue` is `null` when no cadence was supplied; age exactly at
+the cadence is not overdue. `hidden_scope` reports restricted dimensions as
+booleans without hidden counts or identifiers. `partial_path_visibility` and the
+per-group flag mark snapshots visible only through an allowlisted intersection;
+their whole-snapshot summaries remain suppressed.
+
+A missing visible snapshot is not evidence that no backup exists. Freshness
+never proves restorability, cryptographic integrity, backup coverage, or a
+successful data verification. Repository connectivity errors remain ordinary
+tool errors rather than freshness results.
+
 ## Tools
 
 ### `restic_capabilities`
@@ -109,11 +130,16 @@ Output `data`: array of `{id, label?, backend, allowed_hosts, allowed_tags, allo
 | `after` | string | optional RFC 3339 inclusive lower bound on snapshot creation time |
 | `before` | string | optional RFC 3339 exclusive upper bound on snapshot creation time |
 | `cursor` | string | opaque continuation; carries the original filters |
+| `include_freshness` | bool | opt-in metadata-only latest-per-group summary |
+| `expected_cadence` | string | optional Go duration (1m to 87600h) for overdue judgment |
+| `freshness_group_by` | string | `host` (default) or `host_tag` |
 
 Output: `{snapshots, count, total, offset, limit, next_cursor?}` sorted newest first (UTC).
 `truncated` is true when more results exist beyond the current offset/limit page.
 When a cursor is supplied, pass only `repository_id`, `cursor`, and optionally
 `limit`; combining a cursor with filters or `offset` returns `invalid_argument`.
+`include_freshness` cannot be combined with a cursor because the summary
+describes the first-page selection.
 Cursors are single-use, expire after five minutes, and bind the repository,
 filters, and policy. Snapshot additions after the first page are not spliced into
 the same traversal. Restarting the server invalidates outstanding cursors.

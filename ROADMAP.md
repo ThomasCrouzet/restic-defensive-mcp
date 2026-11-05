@@ -10,6 +10,7 @@ Structurally read-only inspection:
 - Bounds, redaction, audit, cost classes
 - Executable stdio tests with real restic and temporary repositories
 - Mixed and nested visibility-policy scenarios, including statistics restrictions
+- Opt-in metadata-only freshness summaries without discovery probes
 - Local protocol evidence and real-child cancellation checks
 - Releases with platform archives, checksums, and license notices
 
