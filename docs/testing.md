@@ -31,6 +31,9 @@ The suite covers two boundaries:
 
 Executable tests cover startup, version output, all seven tools, and nonempty metadata results.
 They also cover path denial, pagination, empty results, credential restrictions, and the separation of stdout and stderr.
+Configuration diagnostics are exercised through the executable for valid,
+invalid, permission-failing, unreachable, and machine-readable results, including
+the guarantee that local validation does not contact a configured backend.
 Repository location changes cannot retarget a running server.
 Password replacement changes authentication results without changing the configured repository.
 Snapshot IDs remain unchanged after inspection.

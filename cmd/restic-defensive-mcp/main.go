@@ -32,11 +32,25 @@ func main() {
 func run() int {
 	configPath := flag.String("config", "", "path to YAML configuration file (required)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	validateConfig := flag.Bool("validate-config", false, "validate local configuration and exit")
+	diagnose := flag.Bool("diagnose", false, "validate configuration and explicitly probe configured repositories")
+	jsonOutput := flag.Bool("json", false, "emit machine-readable diagnostic output")
 	flag.Parse()
 
 	if *showVersion {
 		_, _ = fmt.Fprintf(os.Stdout, "restic-defensive-mcp %s\n", version)
 		return 0
+	}
+	if *validateConfig && *diagnose {
+		fmt.Fprintf(os.Stderr, "error: --validate-config and --diagnose are mutually exclusive\n")
+		return 2
+	}
+	if *jsonOutput && !*validateConfig && !*diagnose {
+		fmt.Fprintf(os.Stderr, "error: --json requires --validate-config or --diagnose\n")
+		return 2
+	}
+	if *validateConfig || *diagnose {
+		return runConfigDiagnostic(*configPath, *diagnose, *jsonOutput)
 	}
 	if *configPath == "" {
 		fmt.Fprintf(os.Stderr, "error: --config is required\n")

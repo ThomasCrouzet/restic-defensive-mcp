@@ -143,6 +143,34 @@ restic. On Windows, create equivalent private regular files and enforce NTFS
 ACLs; the shell commands above are not Windows setup instructions. Review the
 [configuration rules](#configuration) before connecting a client.
 
+### Validate configuration before connecting a client
+
+Local validation checks YAML structure, limits, allowlists, the restic binary and
+version, and secret-file readability without contacting a repository:
+
+```sh
+./restic-defensive-mcp --config /absolute/private/directory/config.yaml --validate-config
+./restic-defensive-mcp --config /absolute/private/directory/config.yaml --validate-config --json
+```
+
+Add `--diagnose` only when you explicitly want bounded connectivity checks. It
+uses the approved `restic snapshots --json` inspection command for each
+repository, never backup, restore, init, check, or unlock:
+
+```sh
+./restic-defensive-mcp --config /absolute/private/directory/config.yaml --diagnose
+./restic-defensive-mcp --config /absolute/private/directory/config.yaml --diagnose --json
+```
+
+Exit code `0` means success, `2` means invalid local configuration, and `3` means
+a requested connectivity check failed. Diagnostics write to stdout and exit;
+normal server mode still reserves stdout for MCP JSON-RPC. Reports expose
+repository IDs, backend kinds, effective policy restrictions, empty-allowlist
+warnings, and bounded error codes. They do not include passwords, repository
+URLs, credential values, or secret-file locations. On Windows, file-type and size
+checks run locally, but NTFS ACL enforcement remains the operator's
+responsibility.
+
 ### Connect VS Code and inspect snapshots
 
 In your local VS Code workspace, add this entry to `.vscode/mcp.json`, merging
