@@ -26,9 +26,21 @@ These items preserve the inspection-only contract in [SECURITY.md](SECURITY.md).
   Cancellation still kills the direct restic process only and may leave a lock;
   that platform limit is documented.
 
-## P2: Exercise remote backend deployment boundaries
+## Completed: Exercise remote backend deployment boundaries ([#22](https://github.com/ThomasCrouzet/restic-defensive-mcp/issues/22))
 
 - Component: S3, B2, and REST backend integration.
 - Benefit: detect authentication, TLS, and network differences from local repositories.
-- Completion: disposable services provide controlled credentials and network failures.
-  The executable returns safe errors without exposing repository locations or credentials.
+- Completion: disposable Docker services (restic REST server 0.14.0 and Versity
+  S3 Gateway v1.10.0, pinned by image digest) provide synthetic credentials,
+  temporary data, invalid credentials, access denial, missing repositories,
+  invalid TLS, slow and interrupted responses, timeouts, cancellation, and lock
+  contention. Repositories are prepared only in `internal/testrepo`; the actual
+  MCP executable inspects them over stdio with host, tag, and path filtering.
+  Failures return documented safe errors without URLs, credentials, secret-file
+  paths, or raw backend diagnostics. Tests verify lock and concurrency-slot
+  cleanup plus container and data removal.
+- Evidence: opt-in `RESTIC_MCP_REMOTE_TESTS=1` suite and bounded
+  `.github/workflows/remote-backends.yml` job. The matrix in
+  [docs/remote-backends.md](docs/remote-backends.md) distinguishes REST/S3
+  service checks from B2 configuration acceptance, local failure checks, and
+  manual service validation. B2 never requires a cloud account in CI.

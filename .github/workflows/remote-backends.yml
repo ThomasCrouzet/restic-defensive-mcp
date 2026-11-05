@@ -1,0 +1,86 @@
+name: remote-backends
+
+on:
+  pull_request:
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.github/workflows/remote-backends.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.github/workflows/remote-backends.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-backends-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27.3'
+  RESTIC_VERSION: '0.19.1'
+
+jobs:
+  remote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: download modules
+        run: go mod download && go mod verify
+
+      - name: verify docker
+        run: docker version && docker info --format '{{.ServerVersion}} {{.Driver}}'
+
+      - name: install restic
+        run: |
+          set -euo pipefail
+          arch=amd64
+          ver="${RESTIC_VERSION}"
+          install_dir="$RUNNER_TEMP/restic-${ver}"
+          archive="$RUNNER_TEMP/restic-${ver}.bz2"
+          sums="$RUNNER_TEMP/restic-${ver}-SHA256SUMS"
+          asset="restic_${ver}_linux_${arch}.bz2"
+          base="https://github.com/restic/restic/releases/download/v${ver}"
+          mkdir -p "$install_dir"
+          curl -fsSL -o "$archive" "${base}/${asset}"
+          curl -fsSL -o "$sums" "${base}/SHA256SUMS"
+          expected="$(awk -v asset="$asset" '$2 == asset {print $1}' "$sums")"
+          test -n "$expected"
+          echo "$expected  $archive" | sha256sum -c -
+          bunzip2 -c "$archive" >"$install_dir/restic"
+          chmod +x "$install_dir/restic"
+          "$install_dir/restic" version
+
+      - name: disposable remote backend tests
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/restic-defensive-mcp-remote-e2e"
+          mkdir -p "$artifact_dir"
+          command="GOMAXPROCS=2 GOFLAGS=-p=1 go test -tags=integration -count=1 -timeout 12m -v ."
+          PATH="$RUNNER_TEMP/restic-${RESTIC_VERSION}:$PATH" \
+            RESTIC_MCP_REMOTE_TESTS=1 \
+            RESTIC_MCP_ARTIFACT_DIR="$artifact_dir" \
+            RESTIC_MCP_E2E_COMMAND="$command" \
+            GOMAXPROCS=2 \
+            GOFLAGS=-p=1 \
+            go test -tags=integration -count=1 -timeout 12m -v .
+          ls -l "$artifact_dir"

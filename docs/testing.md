@@ -116,9 +116,41 @@ Repository location changes cannot retarget a running server.
 Password replacement changes authentication results without changing the configured repository.
 Snapshot IDs remain unchanged after inspection.
 
-These tests do not restore file contents or exercise remote storage services.
-Remote backend credentials, TLS, and network behavior require deployment-specific checks.
+These tests do not restore file contents. Remote REST and S3-compatible service
+checks are a separate opt-in suite described below.
 Cross-compilation proves that release targets build. It does not prove runtime behavior on every target system.
+
+## Remote backend integration
+
+`RESTIC_MCP_REMOTE_TESTS=1` enables the disposable remote-backend suite. It needs
+Docker and restic 0.17.1 or later:
+
+```bash
+RESTIC_MCP_REMOTE_TESTS=1 GOMAXPROCS=2 GOFLAGS=-p=1 make integration-remote
+```
+
+The suite starts pinned Docker images for restic REST server 0.14.0 and Versity
+S3 Gateway v1.10.0. Images are referenced by manifest digest, and the tests
+verify the embedded version before use. It prepares repositories only through
+`internal/testrepo`, then drives the real executable over stdio.
+
+The suite covers successful snapshot, browse, find, and statistics calls with
+host, tag, and path filtering. Controlled failures cover missing repositories,
+invalid credentials or access denial, self-signed TLS, delayed and interrupted
+responses, timeouts, cancellation, and exclusive lock contention. Tests check
+that errors contain no backend URL, credential value, secret-file path, or raw
+service diagnostic; that cancellation cleans up normal locks; that timeouts and
+cancellation release the repository concurrency slot; and that containers and
+temporary data are removed after success and failure.
+
+Backblaze B2 is not automated. The suite automates configuration acceptance,
+allowlisting, and redaction only. Native B2 service validation is an explicit
+operator procedure and never requires a cloud account in CI. The service
+versions, scenario matrix, error mapping, and residual limitations are in
+[Remote backends](remote-backends.md).
+
+The remote CI workflow runs only for source, module, Makefile, or workflow
+changes, so documentation-only changes do not start Docker jobs.
 
 ## Local evidence
 
@@ -167,6 +199,9 @@ Do not add tests solely for coverage percentages, dependency behavior, or mocked
 
 The required `ci` job runs formatting, lint, race, integration, vulnerability, module, and cross-compilation checks.
 Integration runs use restic 0.17.1 and 0.19.1.
+The `remote-backends` workflow runs the opt-in REST and S3-compatible suite on
+restic 0.19.1 with Docker, bounded by a job timeout, and skips documentation-only
+changes.
 The `secrets` job scans Git history with redacted output.
 The release job requires successful `ci` and `secrets` jobs for the tag.
 The tagged commit must also belong to `main`.
