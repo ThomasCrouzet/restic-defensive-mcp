@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -149,7 +150,14 @@ func Create(ctx context.Context, resticBinary string) (*Fixture, error) {
 
 // WriteConfig writes a complete server configuration for this fixture.
 func (f *Fixture) WriteConfig(path, resticBinary string) error {
-	return f.writeConfig(path, resticBinary, f.RepositoryFile, "")
+	return f.WriteConfigForPaths(path, resticBinary, []string{f.DataDir1, f.DataDir2})
+}
+
+// WriteConfigForPaths writes a fixture configuration with explicit allowed paths.
+// Hosts and tags keep the fixture defaults; callers use this to exercise path
+// policy intersections without changing repository contents.
+func (f *Fixture) WriteConfigForPaths(path, resticBinary string, allowedPaths []string) error {
+	return f.writeConfig(path, resticBinary, f.RepositoryFile, "", allowedPaths)
 }
 
 // WriteConfigWithBlockedEnvKey writes a config that must fail during startup.
@@ -167,7 +175,7 @@ func (f *Fixture) WriteConfigWithBlockedEnvKey(path, resticBinary, key string) e
 	if err := os.WriteFile(envPath, []byte(key+"="+value+"\n"), 0o600); err != nil {
 		return err
 	}
-	return f.writeConfig(path, resticBinary, f.RepositoryFile, envPath)
+	return f.writeConfig(path, resticBinary, f.RepositoryFile, envPath, []string{f.DataDir1, f.DataDir2})
 }
 
 // WriteS3Config writes a synthetic S3 configuration without contacting a backend.
@@ -191,13 +199,17 @@ func (f *Fixture) WriteS3Config(path, resticBinary string, credentials S3Credent
 			return err
 		}
 	}
-	return f.writeConfig(path, resticBinary, repositoryPath, envPath)
+	return f.writeConfig(path, resticBinary, repositoryPath, envPath, []string{f.DataDir1, f.DataDir2})
 }
 
-func (f *Fixture) writeConfig(path, resticBinary, repositoryPath, envPath string) error {
+func (f *Fixture) writeConfig(path, resticBinary, repositoryPath, envPath string, allowedPaths []string) error {
 	envFiles := ""
 	if envPath != "" {
 		envFiles = fmt.Sprintf("    env_files: [%q]\n", envPath)
+	}
+	quotedPaths := make([]string, 0, len(allowedPaths))
+	for _, allowed := range allowedPaths {
+		quotedPaths = append(quotedPaths, strconv.Quote(allowed))
 	}
 	content := fmt.Sprintf(`version: 1
 restic_binary: %q
@@ -218,8 +230,8 @@ repositories:
     cache_dir: %q
     allowed_hosts: [%q]
     allowed_tags: [daily, weekly, test, missing]
-    allowed_paths: [%q, %q]
-%s`, resticBinary, repositoryPath, f.PasswordFile, f.CacheDir, f.Host, f.DataDir1, f.DataDir2, envFiles)
+    allowed_paths: [%s]
+%s`, resticBinary, repositoryPath, f.PasswordFile, f.CacheDir, f.Host, strings.Join(quotedPaths, ", "), envFiles)
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 

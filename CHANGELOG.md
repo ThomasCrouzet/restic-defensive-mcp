@@ -8,6 +8,9 @@ All notable changes to this project are documented in this file.
 
 - Populate `find_files` match names from validated POSIX snapshot paths when
   restic omits the upstream `name` field.
+- Select snapshots when an allowlisted parent contains snapshot roots, including
+  parent/child, equal, nested, and `/` scopes, without hiding visible concrete
+  snapshot IDs from `find_files`.
 
 ## [0.1.0]: 2026-10-23
 
