@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Cancel Unix restic inspections with a graceful `SIGTERM`, a bounded cleanup
+  window, and process-group `SIGKILL` fallback so normal lock cleanup can run.
 - Populate `find_files` match names from validated POSIX snapshot paths when
   restic omits the upstream `name` field.
 - Select snapshots when an allowlisted parent contains snapshot roots, including
@@ -31,6 +33,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Cancel Unix restic inspections with a graceful `SIGTERM`, a bounded cleanup
+  window, and process-group `SIGKILL` fallback so normal lock cleanup can run.
 - Reject AWS profiles and shared credential files that can execute credential helpers.
 - Require static S3 credentials to prevent fallback to host instance credentials.
 - Reject saturated command capacity with `resource_busy` instead of queuing requests.

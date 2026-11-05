@@ -61,8 +61,12 @@ treated as potentially compromised, confused, or hostile.
 - Internal process results redact exact sealed repository and credential values from child stderr.
 - Generic child failures return a fixed message without stderr details.
   This prevents disclosure when a backend changes the format of a repository URL in an error.
-- Reaching an output cap cancels the child immediately; it does not merely
-  stop buffering while restic continues running.
+- Reaching an output cap starts the same bounded cancellation lifecycle as a
+  caller cancellation or timeout; it does not merely stop buffering while
+  restic continues running.
+- On Unix, cancellation sends `SIGTERM` to restic's process group, allows a
+  two-second cleanup window, then sends `SIGKILL` to the whole group. The period
+  is bounded and output retention stops growing at the configured cap.
 - Audit logs avoid full file paths by default.
 - Pre-restic policy denials (`not_allowed`) and unknown `repository_id` are
   audit-logged as `tool_rejected` events (no full paths).
@@ -75,6 +79,11 @@ treated as potentially compromised, confused, or hostile.
 - **Read-only means no intentional repository content mutation.** Restic may
   still create or update a **local cache** and may take **repository locks**
   during inspection commands. This is documented per operation class.
+- Graceful cancellation normally lets restic remove its inspection lock. If a
+  process ignores `SIGTERM`, forced group termination can still leave a stale
+  lock behind. A later exclusive maintenance operation may then require the
+  operator to run restic's documented unlock procedure manually; this server
+  never runs `unlock`.
 - File names and paths that the operator allowlists are visible to the MCP
   client. Treat the client as able to exfiltrate that metadata.
 - **Empty allowlists mean no restriction** for that dimension. An empty
@@ -124,7 +133,8 @@ treated as potentially compromised, confused, or hostile.
 | Multi-root `find` has ambiguous path scope | Caller must select one allowlisted path |
 | Test harness `init`/`backup` | Isolated in `internal/testrepo`; not MCP tools |
 | Timeout kill leaves Windows grandchildren | Direct process kill only; supported backends spawn no helpers |
-| Unix descendant holds inherited output pipes | Cancellation watcher and pipe timeout terminate the process group |
+| Unix descendant holds inherited output pipes | Graceful signal, bounded cleanup, then process-group termination |
+| Forced Unix termination after ignored `SIGTERM` | Whole group is killed within the documented bound; residual lock risk is documented |
 
 ### Local effects of inspection
 

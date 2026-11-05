@@ -240,6 +240,32 @@ func WriteInvalidConfig(path string) error {
 	return os.WriteFile(path, []byte("version: [\n"), 0o600)
 }
 
+// WriteFile writes one file under a fixture data directory.
+func (f *Fixture) WriteFile(dataDir, relative string, contents []byte) error {
+	cleaned := filepath.Clean(relative)
+	if cleaned == "." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) || cleaned == ".." || filepath.IsAbs(cleaned) {
+		return fmt.Errorf("fixture file path must stay inside %s", dataDir)
+	}
+	path := filepath.Join(dataDir, cleaned)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, contents, 0o600)
+}
+
+// AddSnapshot creates one additional backup of the named fixture paths.
+func (f *Fixture) AddSnapshot(ctx context.Context, host string, tags []string, paths ...string) error {
+	args := []string{"backup"}
+	if host != "" {
+		args = append(args, "--host", host)
+	}
+	for _, tag := range tags {
+		args = append(args, "--tag", tag)
+	}
+	args = append(args, paths...)
+	return f.run(ctx, args...)
+}
+
 // SetRepositoryLocation replaces the repository location source file.
 func (f *Fixture) SetRepositoryLocation(location string) error {
 	return os.WriteFile(f.RepositoryFile, []byte(location+"\n"), 0o600)

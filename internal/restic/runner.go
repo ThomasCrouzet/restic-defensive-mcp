@@ -16,6 +16,17 @@ import (
 	"github.com/ThomasCrouzet/restic-defensive-mcp/internal/redaction"
 )
 
+const (
+	// gracefulStopWindow lets restic run deferred cleanup after a graceful
+	// signal. Inspection commands can hold a nonexclusive repository lock that
+	// restic removes during that cleanup.
+	gracefulStopWindow = 2 * time.Second
+	// forcedTerminationWindow is the upper bound after the graceful window for
+	// the whole process group to disappear. WaitDelay covers both windows.
+	forcedTerminationWindow = 1 * time.Second
+	childWaitDelay          = gracefulStopWindow + forcedTerminationWindow
+)
+
 // Result is a completed restic process outcome.
 type Result struct {
 	Stdout   []byte
@@ -100,11 +111,14 @@ func (r *ExecRunner) Run(ctx context.Context, req RunRequest) (*Result, error) {
 		cmd.Dir = req.WorkDir
 	}
 	configureProcess(cmd)
+	// Ask restic to clean up first. The watcher below forces the whole process
+	// group down after the bounded graceful window.
 	cmd.Cancel = func() error {
-		return killProcessGroup(cmd)
+		return terminateProcessGroup(cmd)
 	}
 	// Bound waits for inherited stdout/stderr descriptors after cancellation.
-	cmd.WaitDelay = 2 * time.Second
+	// The graceful window runs before this forced wait delay.
+	cmd.WaitDelay = childWaitDelay
 
 	var stdout, stderr cappedBuffer
 	stdout.limit = req.MaxOutputBytes
@@ -127,8 +141,19 @@ func (r *ExecRunner) Run(ctx context.Context, req RunRequest) (*Result, error) {
 			defer close(watcherDone)
 			select {
 			case <-runCtx.Done():
-				_ = killProcessGroup(cmd)
 			case <-finished:
+				return
+			}
+			// CommandContext already called cmd.Cancel. Repeat the graceful
+			// signal defensively, then force the entire group after the window.
+			_ = terminateProcessGroup(cmd)
+			timer := time.NewTimer(gracefulStopWindow)
+			defer timer.Stop()
+			select {
+			case <-finished:
+				return
+			case <-timer.C:
+				_ = killProcessGroup(cmd)
 			}
 		}()
 		err = cmd.Wait()
