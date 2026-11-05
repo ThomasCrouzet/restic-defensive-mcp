@@ -17,6 +17,8 @@ type Deps struct {
 	Audit         *audit.Logger
 	ServerVersion string
 	cursors       *cursorStore
+	// maxResponseBytes bounds the encoded public JSON returned to a client.
+	maxResponseBytes int
 }
 
 // toolNames is the closed list of MCP tools (max 7).
@@ -39,6 +41,12 @@ func ToolNames() []string {
 func NewServer(deps Deps) *mcp.Server {
 	if deps.ServerVersion == "" {
 		deps.ServerVersion = Version
+	}
+	if deps.maxResponseBytes <= 0 && deps.Registry != nil {
+		deps.maxResponseBytes = deps.Registry.Limits().MaxResponseBytes
+	}
+	if deps.maxResponseBytes <= 0 {
+		deps.maxResponseBytes = 2 << 20
 	}
 	deps.cursors = newCursorStore()
 	server := mcp.NewServer(&mcp.Implementation{

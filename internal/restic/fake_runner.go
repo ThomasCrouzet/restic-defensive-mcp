@@ -1,6 +1,7 @@
 package restic
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"time"
@@ -54,6 +55,19 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) (*Result, error) {
 		defRes = &Result{ExitCode: 0, Stdout: []byte("[]"), Duration: time.Millisecond}
 	}
 	return defRes, defErr
+}
+
+// RunScan keeps the buffered fake behaviour while exposing the streaming
+// contract to handlers. Tests can still script stdout as a complete result.
+func (f *FakeRunner) RunScan(ctx context.Context, req RunRequest, consume ScanConsumer) (*Result, error) {
+	res, err := f.Run(ctx, req)
+	if err != nil || res == nil || consume == nil {
+		return res, err
+	}
+	if _, consumeErr := consume(bytes.NewReader(res.Stdout)); consumeErr != nil {
+		return res, consumeErr
+	}
+	return res, nil
 }
 
 // LastCall returns the most recent call or nil.

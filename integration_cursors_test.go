@@ -292,7 +292,8 @@ func TestExecutableCursorTraversal(t *testing.T) {
 		"path":          fixture.DataDir1,
 		"limit":         1,
 	})
-	if firstFind.Count != 1 || firstFind.NextCursor == "" || firstFind.Total != 3 ||
+	if firstFind.Count != 1 || firstFind.NextCursor == "" ||
+		(firstFind.Total != 0 && firstFind.Total != 3) ||
 		!firstFind.Truncated || firstFind.Incomplete {
 		t.Fatalf("first find cursor page = %+v truncated=%v", firstFind, firstFind.Truncated)
 	}
@@ -329,8 +330,11 @@ func TestExecutableCursorTraversal(t *testing.T) {
 			"cursor":        cursor,
 			"limit":         1,
 		})
-		if page.Total != 0 && page.Total != lastTotal {
-			t.Fatalf("find total changed between pages: %d then %d", lastTotal, page.Total)
+		if page.Total != 0 {
+			if lastTotal != 0 && page.Total != lastTotal {
+				t.Fatalf("find total changed between pages: %d then %d", lastTotal, page.Total)
+			}
+			lastTotal = page.Total
 		}
 		hits := 0
 		for _, group := range page.Groups {

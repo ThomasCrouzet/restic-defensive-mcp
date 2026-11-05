@@ -27,7 +27,10 @@ const (
 	defaultMaxSnapshots            = 100
 	defaultMaxNodes                = 500
 	defaultMaxFindResults          = 200
-	defaultMaxOutputBytes          = 8 << 20 // 8 MiB
+	defaultMaxOutputBytes          = 8 << 20  // 8 MiB
+	defaultMaxScanBytes            = 16 << 20 // 16 MiB
+	defaultMaxDecodedEntries       = 50000
+	defaultMaxResponseBytes        = 2 << 20 // 2 MiB
 	defaultMaxConcurrentPerRepo    = 1
 	defaultMaxConcurrentGlobal     = 4
 	defaultMetadataCacheMaxEntries = 128
@@ -44,6 +47,12 @@ const (
 	maxMaxFindResults       = 2000
 	minMaxOutputBytes       = 64 << 10 // 64 KiB
 	maxMaxOutputBytes       = 32 << 20 // 32 MiB
+	minMaxScanBytes         = 64 << 10 // 64 KiB
+	maxMaxScanBytes         = 64 << 20 // 64 MiB
+	minMaxDecodedEntries    = 1
+	maxMaxDecodedEntries    = 1_000_000
+	minMaxResponseBytes     = 16 << 10 // 16 KiB
+	maxMaxResponseBytes     = 16 << 20 // 16 MiB
 	minMetadataCacheTTL     = 1 * time.Second
 	maxMetadataCacheTTL     = 5 * time.Minute
 	maxMetadataCacheEntries = 1024
@@ -73,6 +82,9 @@ type Limits struct {
 	MaxNodes                int           `yaml:"max_nodes"`
 	MaxFindResults          int           `yaml:"max_find_results"`
 	MaxOutputBytes          int           `yaml:"max_output_bytes"`
+	MaxScanBytes            int           `yaml:"max_scan_bytes"`
+	MaxDecodedEntries       int           `yaml:"max_decoded_entries"`
+	MaxResponseBytes        int           `yaml:"max_response_bytes"`
 	MaxConcurrentPerRepo    int           `yaml:"max_concurrent_per_repo"`
 	MaxConcurrentGlobal     int           `yaml:"max_concurrent_global"`
 	// MetadataCacheTTL enables a short-lived in-memory cache for identical
@@ -193,6 +205,15 @@ func (c *Config) applyLimitDefaults() {
 	if c.Limits.MaxOutputBytes == 0 {
 		c.Limits.MaxOutputBytes = defaultMaxOutputBytes
 	}
+	if c.Limits.MaxScanBytes == 0 {
+		c.Limits.MaxScanBytes = defaultMaxScanBytes
+	}
+	if c.Limits.MaxDecodedEntries == 0 {
+		c.Limits.MaxDecodedEntries = defaultMaxDecodedEntries
+	}
+	if c.Limits.MaxResponseBytes == 0 {
+		c.Limits.MaxResponseBytes = defaultMaxResponseBytes
+	}
 	if c.Limits.MaxConcurrentPerRepo == 0 {
 		c.Limits.MaxConcurrentPerRepo = defaultMaxConcurrentPerRepo
 	}
@@ -226,6 +247,15 @@ func (c *Config) validateLimits() error {
 	}
 	if l.MaxOutputBytes < minMaxOutputBytes || l.MaxOutputBytes > maxMaxOutputBytes {
 		return apperr.New(apperr.ConfigError, "limits.max_output_bytes out of range")
+	}
+	if l.MaxScanBytes < minMaxScanBytes || l.MaxScanBytes > maxMaxScanBytes {
+		return apperr.New(apperr.ConfigError, "limits.max_scan_bytes out of range")
+	}
+	if l.MaxDecodedEntries < minMaxDecodedEntries || l.MaxDecodedEntries > maxMaxDecodedEntries {
+		return apperr.New(apperr.ConfigError, "limits.max_decoded_entries out of range")
+	}
+	if l.MaxResponseBytes < minMaxResponseBytes || l.MaxResponseBytes > maxMaxResponseBytes {
+		return apperr.New(apperr.ConfigError, "limits.max_response_bytes out of range")
 	}
 	if l.MaxConcurrentPerRepo < 1 || l.MaxConcurrentPerRepo > 4 {
 		return apperr.New(apperr.ConfigError, "limits.max_concurrent_per_repo out of range")

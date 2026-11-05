@@ -2,6 +2,7 @@
 package repositories
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"time"
@@ -170,6 +171,29 @@ func (r *Registry) IDs() []string {
 
 // Run executes a restic command against a repository with concurrency limits.
 func (r *Registry) Run(ctx context.Context, repoID string, argv []string, expensive bool) (*restic.Result, error) {
+	return r.run(ctx, repoID, argv, expensive, nil)
+}
+
+// RunScan executes a restic command while streaming stdout to consume. The
+// same repository and global slots, timeout, sealed environment, and audit path
+// apply. Runners without streaming support fall back to a bounded buffered run.
+func (r *Registry) RunScan(
+	ctx context.Context,
+	repoID string,
+	argv []string,
+	expensive bool,
+	consume restic.ScanConsumer,
+) (*restic.Result, error) {
+	return r.run(ctx, repoID, argv, expensive, consume)
+}
+
+func (r *Registry) run(
+	ctx context.Context,
+	repoID string,
+	argv []string,
+	expensive bool,
+	consume restic.ScanConsumer,
+) (*restic.Result, error) {
 	e, err := r.Get(repoID)
 	if err != nil {
 		return nil, err
@@ -218,12 +242,23 @@ func (r *Registry) Run(ctx context.Context, repoID string, argv []string, expens
 		timeout = r.limits.ExpensiveCommandTimeout
 	}
 
-	res, err := r.runner.Run(ctx, restic.RunRequest{
+	req := restic.RunRequest{
 		Argv:           argv,
 		Env:            e.childEnv,
 		Timeout:        timeout,
 		MaxOutputBytes: r.limits.MaxOutputBytes,
-	})
+	}
+	var res *restic.Result
+	if consume == nil {
+		res, err = r.runner.Run(ctx, req)
+	} else if streamer, ok := r.runner.(restic.ScanRunner); ok {
+		res, err = streamer.RunScan(ctx, req, consume)
+	} else {
+		res, err = r.runner.Run(ctx, req)
+		if err == nil {
+			_, err = consume(bytes.NewReader(res.Stdout))
+		}
+	}
 	r.auditRun(repoID, argv[0], start, err)
 	return res, err
 }

@@ -19,6 +19,12 @@ All notable changes to this project are documented in this file.
   into registration, contract, selection, and handler components.
 - Attest release archives and `SHA256SUMS` with GitHub build provenance and
   document identity-bound verification commands and limits.
+- Stream restic `ls`/`find` output through incremental decoders that apply
+  policy before page counting, retain only the authorized page, and stop once a
+  continuation boundary is known. Add explicit `max_scan_bytes`,
+  `max_decoded_entries`, and `max_response_bytes` limits with validated defaults
+  and document incomplete/budget-exhausted paging semantics in
+  `docs/scan-budgets.md`.
 
 - Add `--validate-config` for local configuration diagnostics and `--diagnose`
   for explicitly requested bounded repository connectivity checks. Both support

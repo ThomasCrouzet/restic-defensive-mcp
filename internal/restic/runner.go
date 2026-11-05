@@ -54,6 +54,16 @@ type Runner interface {
 	Run(ctx context.Context, req RunRequest) (*Result, error)
 }
 
+// ScanConsumer reads restic stdout incrementally. Returning stop=true asks the
+// runner to terminate the child gracefully once a page boundary is known.
+type ScanConsumer func(stdout io.Reader) (stop bool, err error)
+
+// ScanRunner is implemented by runners that can stream stdout to a consumer
+// without buffering the complete result.
+type ScanRunner interface {
+	RunScan(ctx context.Context, req RunRequest, consume ScanConsumer) (*Result, error)
+}
+
 // ExecRunner runs the real restic binary via os/exec without a shell.
 type ExecRunner struct {
 	binary string
@@ -191,6 +201,114 @@ func (r *ExecRunner) Run(ctx context.Context, req RunRequest) (*Result, error) {
 			return res, MapExitCode(res.ExitCode, safeStderr)
 		}
 		return res, apperr.New(apperr.InternalError, "failed to execute restic").WithCause(err)
+	}
+	res.ExitCode = 0
+	return res, nil
+}
+
+// RunScan executes restic while streaming stdout to consume. The consumer may
+// stop early once it has enough data; the child is then cancelled through the
+// same graceful window as a timeout. stderr remains capped, and the result
+// never reports a protocol/backend failure as a complete success.
+func (r *ExecRunner) RunScan(ctx context.Context, req RunRequest, consume ScanConsumer) (*Result, error) {
+	if err := AssertArgvAllowed(req.Argv); err != nil {
+		return nil, apperr.New(apperr.InternalError, "refusing to run disallowed argv").WithCause(err)
+	}
+	if req.Timeout <= 0 {
+		req.Timeout = 30 * time.Second
+	}
+	if req.MaxOutputBytes <= 0 {
+		req.MaxOutputBytes = 8 << 20
+	}
+	if consume == nil {
+		return r.Run(ctx, req)
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, r.binary, req.Argv...)
+	cmd.Env = req.Env
+	if req.WorkDir != "" {
+		cmd.Dir = req.WorkDir
+	}
+	configureProcess(cmd)
+	cmd.Cancel = func() error { return terminateProcessGroup(cmd) }
+	cmd.WaitDelay = childWaitDelay
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, apperr.New(apperr.InternalError, "failed to create stdout pipe").WithCause(err)
+	}
+	var stderr cappedBuffer
+	stderr.limit = req.MaxOutputBytes
+	stderr.onExceeded = cancel
+	cmd.Stderr = &stderr
+
+	start := time.Now()
+	if err := cmd.Start(); err != nil {
+		return &Result{Duration: time.Since(start)}, apperr.New(apperr.InternalError, "failed to execute restic").WithCause(err)
+	}
+
+	finished := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-runCtx.Done():
+		case <-finished:
+			return
+		}
+		_ = terminateProcessGroup(cmd)
+		timer := time.NewTimer(gracefulStopWindow)
+		defer timer.Stop()
+		select {
+		case <-finished:
+			return
+		case <-timer.C:
+			_ = killProcessGroup(cmd)
+		}
+	}()
+
+	stopRequested, consumeErr := consume(stdout)
+	if stopRequested || consumeErr != nil {
+		// Stop a child that may still be producing output. This is the same
+		// bounded graceful path used for timeouts and caller cancellation.
+		cancel()
+	}
+	waitErr := cmd.Wait()
+	close(finished)
+	<-watcherDone
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		_ = killProcessGroup(cmd)
+	}
+	dur := time.Since(start)
+	safeStderr := redactChildStderr(stderr.Bytes(), req.Env)
+
+	res := &Result{Stderr: safeStderr, Duration: dur}
+	if stderr.exceeded {
+		return res, apperr.New(apperr.OutputLimitExceeded, "restic stderr exceeded configured limit")
+	}
+	if !stopRequested && runCtx.Err() == context.DeadlineExceeded {
+		return res, apperr.New(apperr.Timeout, "restic command timed out")
+	}
+	if !stopRequested && ctx.Err() != nil {
+		return res, apperr.New(apperr.Cancelled, "request cancelled")
+	}
+	if consumeErr != nil {
+		return res, consumeErr
+	}
+	if stopRequested {
+		res.ExitCode = 0
+		return res, nil
+	}
+	if waitErr != nil {
+		var ee *exec.ExitError
+		if errors.As(waitErr, &ee) {
+			res.ExitCode = ee.ExitCode()
+			return res, MapExitCode(res.ExitCode, safeStderr)
+		}
+		return res, apperr.New(apperr.InternalError, "failed to execute restic").WithCause(waitErr)
 	}
 	res.ExitCode = 0
 	return res, nil

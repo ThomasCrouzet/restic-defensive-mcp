@@ -24,6 +24,7 @@ const (
 	Timeout               Code = "timeout"
 	Cancelled             Code = "cancelled"
 	OutputLimitExceeded   Code = "output_limit_exceeded"
+	ResponseLimitExceeded Code = "response_limit_exceeded"
 	ProtocolError         Code = "protocol_error"
 	InternalError         Code = "internal_error"
 	ConfigError           Code = "config_error"
