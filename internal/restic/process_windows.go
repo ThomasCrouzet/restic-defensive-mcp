@@ -22,6 +22,13 @@ func configureProcess(cmd *exec.Cmd) {
 	}
 }
 
+// terminateProcessGroup has no supported graceful console signal in v0.1.
+// Windows cancellation remains a direct process kill; the native-runtime
+// follow-up owns a bounded console or job-object lifecycle.
+func terminateProcessGroup(cmd *exec.Cmd) error {
+	return killProcessGroup(cmd)
+}
+
 func killProcessGroup(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return os.ErrProcessDone

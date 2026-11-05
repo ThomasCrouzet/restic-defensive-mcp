@@ -76,14 +76,21 @@ explicitly.
 
 ## Process lifecycle (timeouts)
 
-- **Unix:** restic is started in its own process group (`Setpgid`); timeouts
-  send `SIGKILL` to the group.
-- **Windows:** restic is started with `CREATE_NEW_PROCESS_GROUP`; timeouts
-  kill the direct restic process only (no full job-object tree walk in v0.1).
+- **Unix:** restic is started in its own process group (`Setpgid`). Caller
+  cancellation, deadlines, output caps, and server shutdown send `SIGTERM` to
+  the group, allow a two-second cleanup window, then send `SIGKILL` to the
+  whole group. The runner waits at most three seconds for inherited pipes.
+  Forced termination can leave a stale inspection lock; this server never runs
+  `unlock`, so an operator may need restic's documented unlock procedure.
+- **Windows:** restic is started with `CREATE_NEW_PROCESS_GROUP`; cancellation
+  kills the direct restic process only (no full job-object tree walk in v0.1).
   Supported backends do not spawn `ssh`/`rclone` helpers.
-- Reaching the stdout or stderr byte cap cancels the child immediately.
+- Reaching the stdout or stderr byte cap starts the same graceful cleanup; it
+  does not keep buffering output.
 - On Unix, cancellation remains active after the group leader exits.
   The runner also terminates remaining group members when inherited output pipes exceed the wait limit.
+- Cancellation, deadline, and output-cap classifications are retained even if
+  restic exits cleanly during the graceful cleanup window.
 
 ## Locks and cache
 

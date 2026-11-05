@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -31,14 +32,17 @@ const (
 	runnerHelperModeEnv          = "RESTIC_RUNNER_HELPER_MODE"
 	runnerHelperPIDFileEnv       = "RESTIC_RUNNER_HELPER_PID_FILE"
 	runnerHelperChildPIDFileEnv  = "RESTIC_RUNNER_HELPER_CHILD_PID_FILE"
+	runnerHelperCleanupFileEnv   = "RESTIC_RUNNER_HELPER_CLEANUP_FILE"
 	runnerHelperStdoutFloodMode  = "stdout-flood"
 	runnerHelperStderrFloodMode  = "stderr-flood"
 	runnerHelperGroupMode        = "group"
 	runnerHelperInheritedPipes   = "inherited-pipes"
 	runnerHelperGrandchildMode   = "grandchild"
+	runnerHelperGracefulMode     = "graceful"
+	runnerHelperIgnoreTermMode   = "ignore-term"
 	runnerHelperPollInterval     = 10 * time.Millisecond
 	runnerHelperStartupTimeout   = 3 * time.Second
-	runnerHelperShutdownTimeout  = 3 * time.Second
+	runnerHelperShutdownTimeout  = 5 * time.Second
 	runnerHelperOperationTimeout = 8 * time.Second
 )
 
@@ -132,6 +136,98 @@ func TestExecRunnerTimeoutKillsProcessGroup(t *testing.T) {
 	waitForRunnerProcessExit(t, childPID, runnerHelperShutdownTimeout)
 }
 
+func TestExecRunnerGracefulCancellationRunsCleanup(t *testing.T) {
+	tempDir := t.TempDir()
+	pidFile := filepath.Join(tempDir, "parent.pid")
+	cleanupFile := filepath.Join(tempDir, "cleanup.done")
+	registerRunnerProcessCleanup(t, pidFile)
+
+	runner := newSelfExecRunner(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	env := runnerHelperEnv(runnerHelperGracefulMode, pidFile, "")
+	env = append(env, runnerHelperCleanupFileEnv+"="+cleanupFile)
+
+	type runOutcome struct {
+		result *Result
+		err    error
+	}
+	outcomes := make(chan runOutcome, 1)
+	go func() {
+		result, err := runner.Run(ctx, RunRequest{
+			Argv:           BuildVersionArgv(),
+			Env:            env,
+			Timeout:        runnerHelperOperationTimeout,
+			MaxOutputBytes: 1 << 20,
+		})
+		outcomes <- runOutcome{result: result, err: err}
+	}()
+
+	pid := readRunnerHelperPID(t, pidFile, runnerHelperStartupTimeout)
+	start := time.Now()
+	cancel()
+	select {
+	case outcome := <-outcomes:
+		if !apperr.IsCode(outcome.err, apperr.Cancelled) {
+			t.Fatalf("Run error = %v, want %s", outcome.err, apperr.Cancelled)
+		}
+	case <-time.After(runnerHelperShutdownTimeout):
+		t.Fatal("Run did not return after graceful cancellation")
+	}
+	if elapsed := time.Since(start); elapsed >= gracefulStopWindow {
+		t.Fatalf("Run took %s, want cleanup before the %s graceful window", elapsed, gracefulStopWindow)
+	}
+	if _, err := os.Stat(cleanupFile); err != nil {
+		t.Fatalf("helper did not run graceful cleanup: %v", err)
+	}
+	waitForRunnerProcessExit(t, pid, runnerHelperShutdownTimeout)
+}
+
+func TestExecRunnerForceKillsProcessGroupAfterGracefulWindow(t *testing.T) {
+	tempDir := t.TempDir()
+	pidFile := filepath.Join(tempDir, "parent.pid")
+	childPIDFile := filepath.Join(tempDir, "child.pid")
+	registerRunnerProcessCleanup(t, pidFile, childPIDFile)
+
+	runner := newSelfExecRunner(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	type runOutcome struct {
+		result *Result
+		err    error
+	}
+	outcomes := make(chan runOutcome, 1)
+	go func() {
+		result, err := runner.Run(ctx, RunRequest{
+			Argv:           BuildVersionArgv(),
+			Env:            runnerHelperEnv(runnerHelperIgnoreTermMode, pidFile, childPIDFile),
+			Timeout:        runnerHelperOperationTimeout,
+			MaxOutputBytes: 1 << 20,
+		})
+		outcomes <- runOutcome{result: result, err: err}
+	}()
+
+	parentPID := readRunnerHelperPID(t, pidFile, runnerHelperStartupTimeout)
+	childPID := readRunnerHelperPID(t, childPIDFile, runnerHelperStartupTimeout)
+	start := time.Now()
+	cancel()
+	select {
+	case outcome := <-outcomes:
+		if !apperr.IsCode(outcome.err, apperr.Cancelled) {
+			t.Fatalf("Run error = %v, want %s", outcome.err, apperr.Cancelled)
+		}
+	case <-time.After(runnerHelperShutdownTimeout):
+		t.Fatal("Run did not return after forced termination")
+	}
+	elapsed := time.Since(start)
+	if elapsed >= gracefulStopWindow+forcedTerminationWindow+time.Second {
+		t.Fatalf("Run took %s, want forced termination within %s", elapsed, gracefulStopWindow+forcedTerminationWindow)
+	}
+	waitForRunnerProcessExit(t, parentPID, runnerHelperShutdownTimeout)
+	waitForRunnerProcessExit(t, childPID, runnerHelperShutdownTimeout)
+}
+
 func TestExecRunnerInheritedPipesDoNotOutliveWaitDelay(t *testing.T) {
 	tempDir := t.TempDir()
 	pidFile := filepath.Join(tempDir, "parent.pid")
@@ -154,8 +250,8 @@ func TestExecRunnerInheritedPipesDoNotOutliveWaitDelay(t *testing.T) {
 	if result == nil {
 		t.Fatal("Run returned no result")
 	}
-	if elapsed >= runnerHelperOperationTimeout/2 {
-		t.Fatalf("Run took %s with inherited pipes; timeout was %s", elapsed, runnerHelperOperationTimeout)
+	if elapsed >= childWaitDelay+2*time.Second {
+		t.Fatalf("Run took %s with inherited pipes; wait delay was %s", elapsed, childWaitDelay)
 	}
 
 	parentPID := readRunnerHelperPID(t, pidFile, runnerHelperStartupTimeout)
@@ -250,7 +346,7 @@ func runRunnerProcessHelper(mode string) int {
 			}
 		}
 	case runnerHelperGroupMode, runnerHelperInheritedPipes:
-		if err := startRunnerHelperGrandchild(os.Getenv(runnerHelperChildPIDFileEnv)); err != nil {
+		if err := startRunnerHelperGrandchild(runnerHelperGrandchildMode, os.Getenv(runnerHelperChildPIDFileEnv)); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			return 3
 		}
@@ -260,19 +356,45 @@ func runRunnerProcessHelper(mode string) int {
 		for {
 			time.Sleep(time.Hour)
 		}
-	case runnerHelperGrandchildMode:
-		for {
-			time.Sleep(time.Hour)
+	case runnerHelperGrandchildMode, runnerHelperIgnoreTermMode:
+		// Ignore SIGTERM so the runner must force the process group down.
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM)
+		defer signal.Stop(signals)
+		if mode == runnerHelperIgnoreTermMode && os.Getenv(runnerHelperChildPIDFileEnv) != "" {
+			if err := startRunnerHelperGrandchild(runnerHelperIgnoreTermMode, os.Getenv(runnerHelperChildPIDFileEnv)); err != nil {
+				_, _ = fmt.Fprintln(os.Stderr, err)
+				return 3
+			}
 		}
+		for {
+			select {
+			case <-signals:
+				// Deliberately keep running until SIGKILL arrives.
+			case <-time.After(time.Hour):
+			}
+		}
+	case runnerHelperGracefulMode:
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM)
+		<-signals
+		signal.Stop(signals)
+		if cleanupFile := os.Getenv(runnerHelperCleanupFileEnv); cleanupFile != "" {
+			if err := os.WriteFile(cleanupFile, []byte("cleaned\n"), 0o600); err != nil {
+				_, _ = fmt.Fprintln(os.Stderr, err)
+				return 5
+			}
+		}
+		return 0
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "unknown helper mode %q\n", mode)
 		return 4
 	}
 }
 
-func startRunnerHelperGrandchild(pidFile string) error {
+func startRunnerHelperGrandchild(mode, pidFile string) error {
 	cmd := exec.Command(os.Args[0], BuildVersionArgv()...)
-	cmd.Env = runnerHelperEnv(runnerHelperGrandchildMode, pidFile, "")
+	cmd.Env = runnerHelperEnv(mode, pidFile, "")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
