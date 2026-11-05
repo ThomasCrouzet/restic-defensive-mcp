@@ -14,8 +14,33 @@ make build
 ```
 
 Run `make fuzz-smoke` after parser, path policy, or redaction changes.
-The CI workflow also provides a manual fuzz input.
 The race detector requires a compatible C compiler and CGO support.
+
+## Fuzzing
+
+Normal tests always run each fuzz target's deterministic seed corpus. Pull-request
+validation does not start random exploration, so unrelated changes keep the fast
+path.
+
+Three lanes exist:
+
+- **Deterministic seeds:** `make test`, `make race`, and normal CI runs replay the
+  checked-in seeds.
+- **Manual exploration:** set the CI `fuzz` workflow input, or run
+  `make fuzz-smoke` locally. `FUZZTIME` changes the per-target duration:
+  `FUZZTIME=2m make fuzz-smoke`.
+- **Automatic exploration:** `.github/workflows/fuzz.yml` runs weekly on a
+  schedule and through manual dispatch. It runs one matrix job per target with a
+  default 60-second per-target budget, a 15-minute job timeout, `GOMAXPROCS=2`,
+  and at most two concurrent target jobs. Scheduled runs do not repeat push or
+  pull-request validation.
+
+The scheduled job records the source revision, Go version, package, target,
+per-target budget, GOMAXPROCS, job timeout, and parallelism in its ordinary log.
+A failure fails the workflow step. Go prints the failing target and input in the
+job log; reproduce it locally with the same `go test ... -fuzz ...` command.
+Minimize a meaningful discovery into a reviewed, non-sensitive regression seed.
+Do not upload fuzz reports, corpus archives, traces, or transcripts to GitHub.
 
 ## Integration boundaries
 
