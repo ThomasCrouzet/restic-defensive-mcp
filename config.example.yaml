@@ -3,6 +3,11 @@
 #
 #   restic-defensive-mcp --config /path/to/config.yaml
 #
+# Validate without contacting a repository:
+#   restic-defensive-mcp --config /path/to/config.yaml --validate-config
+# Add an explicit bounded connectivity check:
+#   restic-defensive-mcp --config /path/to/config.yaml --diagnose
+#
 # Callers may only pass repository_id values defined here.
 # Repository URLs, backends, password files, and cache dirs are NOT accepted
 # from MCP tool arguments.

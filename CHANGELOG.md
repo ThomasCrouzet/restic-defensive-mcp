@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add `--validate-config` for local configuration diagnostics and `--diagnose`
+  for explicitly requested bounded repository connectivity checks. Both support
+  human-readable and `--json` output without exposing secrets or backend URLs.
+
 ### Fixed
 
 - Cancel Unix restic inspections with a graceful `SIGTERM`, a bounded cleanup
