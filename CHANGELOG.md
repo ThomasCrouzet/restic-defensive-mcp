@@ -10,6 +10,11 @@ All notable changes to this project are documented in this file.
   for explicitly requested bounded repository connectivity checks. Both support
   human-readable and `--json` output without exposing secrets or backend URLs.
 
+### Changed
+
+- Add a separate weekly bounded fuzz exploration workflow with per-target and
+  whole-job budgets while keeping deterministic seeds in normal CI.
+
 ### Fixed
 
 - Cancel Unix restic inspections with a graceful `SIGTERM`, a bounded cleanup
