@@ -9,6 +9,8 @@ All notable changes to this project are documented in this file.
 - Publish typed output schemas for all seven tools, return matching structured
   content alongside the text compatibility envelope, and split the MCP server
   into registration, contract, selection, and handler components.
+- Attest release archives and `SHA256SUMS` with GitHub build provenance and
+  document identity-bound verification commands and limits.
 
 - Add `--validate-config` for local configuration diagnostics and `--diagnose`
   for explicitly requested bounded repository connectivity checks. Both support
